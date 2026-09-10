@@ -1,9 +1,10 @@
-"""Turn a discovered binding into the submission the clustering driver runs.
+"""Turn a discovered binding into the submission a Week 2 driver runs.
 
-Discovery finds which of a team's functions take photos and return one label
-per photo. The driver wants an object with ``cluster(images, *, seed)``. This
-is the short piece between them, and it lives here because the protocol it
-writes to is Week 2's.
+Discovery finds which of a team's functions do the week's work. Clustering
+wants an object with ``cluster(images, *, seed)``; recognition wants one with
+``enroll(person_id, images)`` and ``recognize(images)``. This is the short
+piece between them, and it lives here because the protocols it writes to are
+Week 2's.
 
 Their functions are called exactly as the search called them, because the
 search is what proved the chain works. Nothing is repaired: a function that
@@ -15,9 +16,14 @@ from __future__ import annotations
 
 import contextlib
 
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
-__all__ = ["DiscoveredClustering", "build"]
+__all__ = [
+    "DiscoveredClustering",
+    "DiscoveredRecognition",
+    "build",
+    "build_recognition",
+]
 
 
 class DiscoveredClustering:
@@ -88,6 +94,95 @@ class DiscoveredClustering:
         return labels_in_photo_order(answer, photos)
 
 
+class DiscoveredRecognition:
+    """A team's own functions, wearing the interface the recognition driver expects.
+
+    Three of theirs rather than one chain: the step that describes a photo,
+    the call that files a descriptor under a name, and the call that looks one
+    up. The search bound all three together by running them, and this replays
+    them the same way, one photo at a time.
+
+    One photo at a time is the contract, not an implementation detail. The
+    driver asks for exactly one label per image, and running the whole batch
+    through their describe step would hand back a pile of descriptors with no
+    way to say which photo each came from once a photo yields no face or two.
+    """
+
+    def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any) -> None:
+        self._chain = list(chain)
+        self._enroll = enroll_call
+        self._query = query_call
+        # The names this has handed over. Not a copy of their database: the
+        # benchmark never reads that. This is the benchmark's own record of
+        # what it asked them to remember, and it is what lets an answer be
+        # read back as an identification or as none.
+        self._known: set = set()
+
+    def enroll(self, person_id: str, images: Sequence[Any]) -> None:
+        """File every face in these photos under one name.
+
+        Every face rather than a chosen one. The benchmark's photos are
+        single-face crops, so every descriptor one of them yields belongs to
+        the person it is of. Choosing between them would be the benchmark
+        inventing a face-selection rule the team did not write; a team who has
+        one has already applied it inside their own describe step, and this
+        stores whatever that returned.
+
+        A photo their step finds no face in enrolls nothing, which is their
+        detector's answer about that photo rather than an error.
+        """
+
+        self._known.add(person_id)
+        for rows in self._describe(images):
+            for row in rows:
+                self._enroll(person_id, row)
+
+    def recognize(self, images: Sequence[Any]) -> List[Optional[str]]:
+        """One answer per photo: a name they gave back, or None.
+
+        When a photo yields several faces their query is asked about each, and
+        the first face it recognized is the answer. Their cutoff and their
+        rejection are the only things deciding; this picks no face and applies
+        no threshold. When it recognized nobody, or when their step found no
+        face at all, the answer is None, which is this contract's word for "I
+        do not know this person" and the honest thing to say about a photo
+        their system could not put a name to.
+        """
+
+        return [self._who(rows) for rows in self._describe(images)]
+
+    def _who(self, rows: Sequence[Any]) -> Optional[str]:
+        """The first face in one photo their query put a name to."""
+
+        # Imported here rather than at module scope, like everything else this
+        # file takes from `.roles`: that module needs cogbench, and this
+        # package is importable, and its other suites run, without it.
+        from .roles import named
+
+        for row in rows:
+            who = named(self._query(row), self._known)
+            if who is not None:
+                return who
+        return None
+
+    def _describe(self, images: Sequence[Any]) -> List[List[Any]]:
+        """Their describe step over these photos, in the form it was bound with."""
+
+        from .roles import _run, descriptors_in, write_photos
+
+        photos = list(images)
+        # The photos go in as the form their first function was bound with:
+        # arrays, or the same photos written to disk as paths. The search
+        # proved the chain on one of those two forms and the scored run has to
+        # present the same one, or it scores a function that never ran. Written
+        # in one batch rather than one file at a time, because each call of
+        # `write_photos` makes a directory that lives until the process ends.
+        if getattr(self._chain[0], "form", None) == 1:
+            photos = write_photos(photos)
+        with _somewhere_throwaway():
+            return [descriptors_in(_run(self._chain, [photo])) for photo in photos]
+
+
 @contextlib.contextmanager
 def _somewhere_throwaway():
     """A working directory their code may write into and read a folder from.
@@ -114,3 +209,29 @@ def build(submission: Any) -> DiscoveredClustering:
     if not getattr(submission, "ready", False):
         raise RuntimeError("This repository did not resolve, so there is nothing to run.")
     return DiscoveredClustering(submission.chain)
+
+
+def build_recognition(submission: Any) -> DiscoveredRecognition:
+    """The same repository, wearing the recognition driver's interface.
+
+    `fresh()` is what makes each scenario start empty. Proving the binding
+    works enrolled two people into the team's database, and when that database
+    is an object or one of their own zero-argument factories those two are
+    still in it; scoring from it would leave `fixture_a` competing with the
+    people the case is actually about. The driver builds one of these per
+    scenario, so this runs once per scenario and each one starts from a
+    database their own code just made.
+
+    A team whose database is a module global has nothing to rebuild. That case
+    is not reachable from here: the search's own probing writes into a global
+    it cannot restore, so their query reads rows the benchmark put there and
+    the repository is refused before a run starts. If a shape ever did get
+    through, `fixture_a` and `fixture_b` are not names of this case, and
+    `roles.named` hands back only names the run enrolled, so a leaked answer
+    reads as unknown rather than as somebody.
+    """
+
+    if not getattr(submission, "ready", False):
+        raise RuntimeError("This repository did not resolve, so there is nothing to run.")
+    ready = submission.fresh()
+    return DiscoveredRecognition(ready.chain, ready.enroll, ready.query)

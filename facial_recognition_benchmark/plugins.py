@@ -115,6 +115,74 @@ class RecognitionBenchmark:
 
         return cache_status(_public_manifest(tier), cache_root)
 
+    def discovery(self) -> Any:
+        """What to look for in a repository that never packaged itself.
+
+        None of the 2026 capstones registered an entry point, so asking for
+        one asks for a step no team took. Instead the benchmark says what its
+        task is and ``cogbench.resolve`` searches their repository against
+        that by running their functions.
+
+        Recognition keeps something between calls, which clustering does not,
+        so this fills in the fields clustering leaves empty: the orders a team
+        writes a call that files a descriptor under a name, and how to
+        recognize one of their own functions that makes an empty database.
+        The resolver pairs a store with a query itself; what the benchmark
+        supplies is the half both of them need, which is turning a photo into
+        a descriptor.
+
+        The FaceNet model goes in as a named resource because the course hands
+        every team the same object and one audited repository takes it as an
+        argument (`detect_and_describe(model, image)`). It is what
+        ``adapters.instantiate`` already gives a submission that declares
+        itself, so a discovered one getting it too is parity rather than help.
+
+        Built lazily, because it reads the cached dataset and loads the model,
+        and importing a plugin should not do either.
+        """
+
+        from cogbench.discovery_spec import DiscoverySpec
+        from cogbench.pipeline import Fixtures
+
+        from .roles import (
+            DESCRIBE_ROLE,
+            enrollment_arrangements,
+            looks_like_an_empty_database,
+            recognition_accepts,
+            recognition_fixture,
+            write_photos,
+        )
+
+        scenario = next(iter(self.load_cases("test")), None)
+        fixture = recognition_fixture(scenario) if scenario is not None else None
+        if fixture is None:
+            return None
+
+        # Two forms of the same photos. The capstone tells students to write a
+        # function that takes image paths, and one audited team's describe step
+        # reads one; another's takes an array. Their own function decides which
+        # it takes, and the photos are identical either way.
+        forms = Fixtures(((fixture.photos,), (write_photos(fixture.photos),)))
+        return DiscoverySpec(
+            chain_role=DESCRIBE_ROLE,
+            fixture=forms,
+            accepts=lambda chain, enroll, query: recognition_accepts(
+                chain, forms.for_chain(chain)[0], fixture, enroll, query
+            ),
+            arrangements=enrollment_arrangements,
+            factories=looks_like_an_empty_database,
+            extras={"model": _facenet()},
+            hints=("week2", "week 2", "vision", "faces", "capstone"),
+            expects="the name of the person the benchmark enrolled",
+        )
+
+    def submission_from_discovery(self, submission: Any) -> Any:
+        """Turn a resolved repository into the object ``run`` expects."""
+
+        from .discovered import build_recognition
+
+        return build_recognition(submission)
+
 
 class ClusteringBenchmark:
     """Load, execute, and score fixed-seed Whispers scenarios."""
@@ -307,6 +375,22 @@ class ClusteringBenchmark:
         from .discovered import build
 
         return build(submission)
+
+
+def _facenet() -> Any:
+    """The model the benchmark hands a describe step that asks for one.
+
+    The same class and the same device the runner scores with
+    (`cogbench.runner._facenet_model`), constructed here because
+    ``discovery()`` runs before a run does and a repository whose describe step
+    takes the model cannot be searched for without one. A missing FaceNet
+    surfaces as the reason discovery is unavailable, which is the same setup
+    problem ``cogworks check`` reports under `modelCache`.
+    """
+
+    from facenet_models import FacenetModel
+
+    return FacenetModel(device="cpu")
 
 
 def _public_manifest(tier: str) -> Mapping[str, Any]:

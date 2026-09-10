@@ -1,16 +1,19 @@
-"""What Week 2's clustering task asks for, described so a repository can be
-searched for it.
+"""What Week 2 asks for, described so a repository can be searched for it.
 
-The capstone is one task: given a folder of photos, put the ones showing the
-same person together. The course names the steps on the way there. Find the
-faces in a picture, turn each into a descriptor, measure how close two
-descriptors are, build a graph from that, and run whispers over the graph.
-Every team writes those, in their own files, under their own names.
+The capstone is two tasks over the same faces. Clustering: given a folder of
+photos, put the ones showing the same person together. Recognition: be told
+who someone is, then answer who is in a photo, including when the answer is
+nobody you know. The course names the steps on the way to both. Find the faces
+in a picture, turn each into a descriptor, measure how close two descriptors
+are, and then either build a graph and run whispers over it, or file the
+descriptor under a name and look one up. Every team writes those, in their own
+files, under their own names.
 
 So this says what each step does in terms of what goes in and what comes back,
-never what it is called. The acceptance test at the bottom is the only thing
-that can accept a chain: hand it photos of two people and require that it puts
-each person's photos together.
+never what it is called. Each task's acceptance test is the only thing that can
+accept a binding: for clustering, hand it photos of two people and require that
+it puts each person's photos together; for recognition, tell it about two
+people and ask who is in a third photo.
 
 Week 1 taught the shape of this file and one lesson worth repeating: the
 validators are for cutting the search, not for judging. A team whose threshold
@@ -21,13 +24,15 @@ discovery.
 from __future__ import annotations
 
 import atexit
-import shutil
 import contextlib
+import inspect
 import io
 import os
+import shutil
 import sys
 import tempfile
-from typing import Any, List, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -42,6 +47,15 @@ __all__ = [
     "looks_like_descriptors",
     "write_photos",
     "lay_out_folders",
+    "DESCRIBE_ROLE",
+    "RecognitionFixture",
+    "descriptors_in",
+    "enrollment_arrangements",
+    "looks_like_an_empty_database",
+    "looks_like_face_descriptors",
+    "named",
+    "recognition_accepts",
+    "recognition_fixture",
 ]
 
 
@@ -650,6 +664,435 @@ def _grouping(labels: Sequence[Any]) -> frozenset:
     for index, label in enumerate(labels):
         groups.setdefault(label, []).append(index)
     return frozenset(frozenset(members) for members in groups.values())
+
+
+# ---------------------------------------------------------------------------
+# Recognition
+# ---------------------------------------------------------------------------
+#
+# The other half of the same capstone, and a different shape of task. Clustering
+# is photos in, groups out, with nothing kept between calls. Recognition
+# remembers: it is told who someone is, and later asked who is in a photo, and
+# the answer depends on everything it was told before.
+#
+# So the search has three things to find rather than one chain. The step that
+# turns a photo into a face descriptor, which enrolling and asking both need;
+# a call that files a descriptor under a name; and a call that takes a
+# descriptor and answers with a name. The resolver already knows how to pair a
+# store with a query (`DiscoverySpec.arrangements`), which is how Week 1 finds
+# a song database, so this describes the same shape for faces.
+#
+# Why the descriptor step is the shared half rather than something each side
+# does privately: it is the only work enrolling and asking have in common, and
+# requiring one chain for both is what proves a team's two sides agree about
+# what a descriptor is. A team whose enrollment describes a face one way and
+# whose query describes it another has a real bug, and running the same chain
+# for both is how that bug stays visible instead of reading as a bad cutoff.
+
+
+#: A value narrower than this is one of the things the model returns beside
+#: the descriptors, not a descriptor. `model.detect` gives back a box of four
+#: numbers and one probability per face, and three of the five audited 2026
+#: repositories hand those back in the same tuple as the descriptors
+#: (CoggurtFilter `(boxes, descriptors)`, Asterisk `(boxes, descriptors,
+#: probabilities)`, Bagel `(boxes, probs, descriptors)`). The search offers
+#: each part of a returned tuple in order, so a plain "float array" test binds
+#: the boxes and scores a whole run against them.
+#:
+#: The floor is not the model's own 512, because a team who reduces the vector
+#: before storing it is answering the same question with a different number,
+#: and refusing that refuses working code over a representation choice.
+NARROWEST_DESCRIPTOR = 16
+
+
+def looks_like_face_descriptors(value: Any) -> bool:
+    """One face descriptor, or one per face in a photo.
+
+    `looks_like_descriptors` with the width rule above. Clustering does not
+    need it: nothing there returns boxes and descriptors together, because a
+    graph builder that describes the faces itself keeps the boxes.
+    """
+
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind != "f" or value.ndim not in (1, 2) or value.size == 0:
+            return False
+        return value.shape[-1] >= NARROWEST_DESCRIPTOR
+    if isinstance(value, (list, tuple)) and value:
+        return looks_like_face_descriptors(value[0])
+    return False
+
+
+DESCRIBE_ROLE = Role(
+    "describe",
+    (
+        Stage(
+            "descriptors",
+            prefers=("descriptor", "describe", "embed", "encode", "facenet", "vector"),
+            produces=looks_like_face_descriptors,
+            # The capstone hands one photo at a time, and four of the five
+            # audited teams wrote a per-photo function. A team who wrote one
+            # that takes the whole list still binds: the search offers both.
+            per_item=True,
+            # The FaceNet model the course hands every team. Four of the five
+            # audited repositories construct their own when their module
+            # loads, but CoggurtFilter's `detect_and_describe(model, image)`
+            # takes it as an argument, and no amount of searching their
+            # repository produces one. It is the same object the benchmark
+            # already gives a submission that declares itself
+            # (`adapters.instantiate`), so offering it here restores parity
+            # rather than supplying anything of ours.
+            extras=("model",),
+        ),
+    ),
+)
+# No tuning slot, unlike the clustering role: every detection cutoff in the
+# audited corpus has a default (`add_image(..., detection_threshold=0.87)`,
+# `detecting_faces(pic, threshold=0.3)`), so nothing here has a required
+# argument the search would have to guess. No folder step either; this task
+# asks about one photo, and a directory is not an answer to it.
+
+
+@dataclass(frozen=True)
+class RecognitionFixture:
+    """Two people to remember and two photos to ask about.
+
+    ``enrollment`` maps a name to positions in ``photos``; ``query`` is the
+    position of a held-out photo of ``query_of``; ``stranger`` is a photo of
+    nobody who was enrolled.
+    """
+
+    photos: Sequence[Any]
+    enrollment: Sequence[Tuple[str, Tuple[int, ...]]]
+    query: int
+    query_of: str
+    stranger: int
+
+
+#: The names the search enrolls. Deliberately not the scored case's names: a
+#: database that survives from the search into a run survives holding these,
+#: and `named` hands back only names the run itself enrolled, so an answer
+#: built from them reads as unknown rather than as one of the case's people.
+FIXTURE_NAMES = ("fixture_a", "fixture_b")
+
+
+def recognition_fixture(scenario: Any) -> Optional[RecognitionFixture]:
+    """Build the search's own small lifecycle out of a scored case.
+
+    Six photos, and the size is the point: each one is described once per
+    candidate the search tries, and describing one is a forward pass of
+    FaceNet. Two people, because naming the right one out of one is not
+    evidence. Two enrollment photos each, because a profile built from a
+    single photo can fall outside a team's own cutoff, and refusing them for
+    that would refuse working code. One stranger, because saying "I do not
+    know this person" is half of what this benchmark measures.
+    """
+
+    known = list(scenario.known)[:2]
+    strangers = list(scenario.unknown_queries)
+    # A case too small to ask the question with. `discovery()` reports that as
+    # having nothing to search for, the same as an uncached dataset does.
+    if (
+        len(known) < 2
+        or not strangers
+        or not known[0].queries
+        or any(len(person.enrollment) < 2 for person in known)
+    ):
+        return None
+
+    photos: List[Any] = []
+    enrollment = []
+    for name, person in zip(FIXTURE_NAMES, known):
+        start = len(photos)
+        photos.extend(person.enrollment[:2])
+        enrollment.append((name, tuple(range(start, len(photos)))))
+    photos.append(known[0].queries[0])
+    photos.append(strangers[0])
+    return RecognitionFixture(
+        photos=tuple(photos),
+        enrollment=tuple(enrollment),
+        query=len(photos) - 2,
+        query_of=FIXTURE_NAMES[0],
+        stranger=len(photos) - 1,
+    )
+
+
+def recognition_accepts(chain, photos, fixture, enroll_call, query_call):
+    """Remember two people, then ask who is in a photo of one of them.
+
+    Returns ``(passed, detail)``. ``passed`` is False, 0.5 or 1.0.
+
+    The half mark is not a near miss, it is which of a team's own functions to
+    bind. Bagel's `VectorDatabase` answers in two ways: `query` ranks the
+    nearest rows and `predict` puts their cutoff in front of the same ranking.
+    Both name the right person, only one of them can say "not this one", and
+    binding the first one reached would have scored that team zero on half the
+    benchmark using code they wrote and did not get bound. So an answer that
+    also rejects the stranger is a fuller answer, the resolver keeps the best
+    grade it has seen, and it stops looking once it has a full one.
+
+    ``query_call`` is None on the resolver's first pass, which asks the
+    smaller question: can this store take the fixture at all. Answering it
+    once per store rather than once per store-and-query pairing is what keeps
+    the search inside its budget.
+
+    What this refuses is a binding that does not work, never a cutoff that is
+    badly chosen. A team who names the stranger still binds, at 0.5, and the
+    benchmark scores their rejection recall at zero, which is the number they
+    can act on.
+    """
+
+    with _fresh_state():
+        try:
+            described = _described(chain, photos)
+        except BaseException as error:  # noqa: BLE001 - student code raises anything
+            return False, (
+                f"describing a photo raised {type(error).__name__}: {str(error)[:120]}"
+            )
+        return _attempt(described, fixture, enroll_call, query_call)
+
+
+def _attempt(described, fixture, enroll_call, query_call):
+    """One enrolment and up to two questions, on one store."""
+
+    for name, positions in fixture.enrollment:
+        for position in positions:
+            for row in described[position]:
+                try:
+                    # A copy per call: one audited store keeps the array it is
+                    # handed rather than a copy of it (`np.asarray(...).ravel()`
+                    # on an array that is already float32 is a view), and a
+                    # later attempt writing through that view would change what
+                    # an earlier one stored.
+                    enroll_call(name, row.copy())
+                except TypeError as error:
+                    # A signature mismatch is not the wrong function, it is a
+                    # different arrangement of the same one.
+                    return False, (
+                        f"enrolling did not accept those arguments: {str(error)[:120]}"
+                    )
+                except BaseException as error:  # noqa: BLE001 - student code raises
+                    return False, (
+                        f"enrolling raised {type(error).__name__}: {str(error)[:120]}"
+                    )
+    if query_call is None:
+        who = " and ".join(name for name, _ in fixture.enrollment)
+        count = sum(len(positions) for _, positions in fixture.enrollment)
+        return True, f"enrolled {who} from {count} photos"
+
+    known = frozenset(name for name, _ in fixture.enrollment)
+    asked, said = _asked(query_call, described[fixture.query], known)
+    if said is not None:
+        return False, said
+    if asked != fixture.query_of:
+        got = "no one" if asked is None else asked
+        return False, f"asked who is in a photo of {fixture.query_of} and got {got}"
+    stranger, said = _asked(query_call, described[fixture.stranger], known)
+    if said is not None:
+        return False, said
+    if stranger is None:
+        return 1.0, f"named {fixture.query_of} and called a stranger unknown"
+    return 0.5, f"named {fixture.query_of}, and named the stranger {stranger}"
+
+
+def _asked(query_call, rows, known):
+    """Who the store says is in one photo, or a refusal sentence.
+
+    Returns ``(name_or_None, None)`` on an answer and ``(None, detail)`` when
+    their query raised. The two are separated because a query that raises is a
+    binding that does not work, and a query that answers "nobody" is a working
+    binding making a decision.
+    """
+
+    for row in rows:
+        try:
+            answer = query_call(row.copy())
+        except BaseException as error:  # noqa: BLE001 - student code raises anything
+            return None, f"querying raised {type(error).__name__}: {str(error)[:120]}"
+        who = named(answer, known)
+        if who is not None:
+            return who, None
+    return None, None
+
+
+def enrollment_arrangements(store, person_id: str, descriptor: Any):
+    """The two orders a team writes a call that files a descriptor by name.
+
+    Both orders appear in the audited corpus and neither is wrong:
+    CoggurtFilter's `add_descriptor(db, name, descriptor)` and Lashika's
+    `FaceDatabase.add_descriptor(name, descriptor)` put the name first,
+    Bagel's `VectorDatabase.add(vector, name)` puts it second. The database
+    itself is already in front of both when a team keeps one as an argument;
+    the resolver binds it there before this is called.
+
+    Every entry is built without calling anything, because the resolver counts
+    them once with a store that does nothing.
+    """
+
+    return (
+        lambda: store(person_id, descriptor),
+        lambda: store(descriptor, person_id),
+    )
+
+
+def looks_like_an_empty_database(candidate: Any) -> bool:
+    """One of their zero-argument functions that makes an empty face database.
+
+    Emptiness is the whole test. A function that hands back a database with
+    people already in it is not a factory, it is a loader, and scoring against
+    it would score their data: Asterisk's `load_database()` takes no arguments
+    and returns the ten identities they committed to their repository.
+
+    Every attribute counts, including the private ones, which is why Week 1
+    says the two mistakes here are not the same size (week1 roles.py:825).
+    Missing a full database costs a run scored against their data. Refusing an
+    object that holds some bookkeeping this cannot size costs nothing: a team
+    whose database is an object of their own is found through the shape that
+    needs no factory, which is how both repositories that score were found.
+    """
+
+    call = getattr(candidate, "call", candidate)
+    try:
+        inspect.signature(call).bind()
+    except (TypeError, ValueError):
+        return False
+    try:
+        with _fresh_state():
+            # Inside a throwaway directory because their factory may write a
+            # file next to itself.
+            made = call()
+    except BaseException:  # noqa: BLE001 - student code raises anything
+        return False
+    if isinstance(made, (dict, list, set, frozenset)):
+        return not made
+    if made is None or isinstance(made, (str, bytes, tuple, int, float, bool, np.ndarray)):
+        return False
+    state = getattr(made, "__dict__", None)
+    if not isinstance(state, dict):
+        return False
+    return not any(_holds_anything(value) for value in state.values())
+
+
+def _holds_anything(value: Any) -> bool:
+    """Whether an attribute of a made-fresh object counts as contents."""
+
+    if value is None or isinstance(value, (str, bytes, int, float, bool)):
+        return False
+    try:
+        return len(value) > 0
+    except TypeError:
+        # Something with no size, a lock or a path. Counted as contents,
+        # because this cannot see whether it is empty and guessing wrong in
+        # the other direction scores a run against their data.
+        return True
+
+
+def descriptors_in(answer: Any) -> List[Any]:
+    """Every face descriptor a chain produced for one photo, as a list of rows.
+
+    The benchmark asks about one photo at a time, so this never has to decide
+    which photo a row came from. What it does decide is how many faces are in
+    the answer: a step bound per photo hands back a one-element list holding
+    that photo's answer, a step that describes every face hands back a matrix,
+    and a step that picks one face hands back a vector. All three say the same
+    thing about the same photo.
+    """
+
+    if isinstance(answer, np.ndarray) and looks_like_face_descriptors(answer):
+        return [answer] if answer.ndim == 1 else list(answer)
+    if isinstance(answer, (list, tuple)):
+        rows: List[Any] = []
+        for item in answer:
+            rows.extend(descriptors_in(item))
+        return rows
+    return []
+
+
+def named(answer: Any, known: Any) -> Optional[str]:
+    """Which of the identities the benchmark enrolled their answer names.
+
+    The benchmark chose every name it handed over, so an answer that is not
+    one of them did not identify anybody it asked about, and the contract's
+    word for that is None. That is why there is no table of sentinels here:
+    the corpus says "Unknown", "unknown", and once a dictionary whose
+    `prediction` is "unknown", and all three are answers this has no name for.
+    A wrong name that the benchmark did enrol is kept as that name, because
+    naming the wrong person and naming nobody are different mistakes with
+    different fixes, and the scorer already reports them apart.
+    """
+
+    first = _first_string(answer, 0)
+    if first is None:
+        return None
+    first = first.strip()
+    return first if first in known else None
+
+
+def _first_string(value: Any, depth: int) -> Optional[str]:
+    """The first name-shaped thing in an answer, read left to right.
+
+    First rather than best. Bagel's `predict` returns their decision under
+    `prediction` and the whole ranking it came from under `results`, so a
+    reader that looked for the closest match would find the top-ranked name
+    inside `results` and turn their correct rejection into an identification.
+    """
+
+    if isinstance(value, str):
+        return value
+    # Bounded rather than trusting the shape: a list that contains itself is a
+    # thing a query can return, and this runs on every scored photo.
+    if depth >= 4:
+        return None
+    if isinstance(value, dict):
+        items: Any = value.values()
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        return None
+    for item in items:
+        found = _first_string(item, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+#: The last chain's descriptors, so a pairing search does not describe the
+#: same photos again for every store and query it tries. One entry, because
+#: every attempt for one chain happens inside one call of the resolver's
+#: pairing loop, and a bigger cache would hold arrays for chains nothing will
+#: ask about again. Measured on CoggurtFilter: 110 acceptance runs, 109 of
+#: them served from here, 0.2 seconds describing photos in total.
+_DESCRIBED: dict = {}
+
+
+def _described(chain: Sequence[Any], photos: Sequence[Any]) -> List[List[Any]]:
+    """The fixture's descriptors under this exact chain, one entry per photo.
+
+    The photos are part of what is cached, by identity, and the entry holds
+    them: two resolves in one process bind Candidates that compare equal, so
+    the chain alone would hand a second fixture the first one's answers, which
+    is exactly the leak this benchmark exists to catch.
+    """
+
+    try:
+        key = tuple(chain)
+    except TypeError:
+        key = None
+    if key is not None and _DESCRIBED.get("chain") == key and _same_photos(photos):
+        return _DESCRIBED["described"]
+    described = [descriptors_in(_run(chain, [photo])) for photo in photos]
+    if key is not None:
+        _DESCRIBED.clear()
+        _DESCRIBED["chain"] = key
+        _DESCRIBED["photos"] = list(photos)
+        _DESCRIBED["described"] = described
+    return described
+
+
+def _same_photos(photos: Sequence[Any]) -> bool:
+    cached = _DESCRIBED.get("photos")
+    if cached is None or len(cached) != len(photos):
+        return False
+    return all(one is other for one, other in zip(cached, photos))
 
 
 def _run(chain: Sequence[Any], images: Sequence[Any]) -> Any:
