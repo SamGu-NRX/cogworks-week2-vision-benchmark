@@ -102,10 +102,10 @@ class DiscoveredRecognition:
     up. The search bound all three together by running them, and this replays
     them the same way, one photo at a time.
 
-    One photo at a time is the contract, not an implementation detail. The
-    driver asks for exactly one label per image, and running the whole batch
-    through their describe step would hand back a pile of descriptors with no
-    way to say which photo each came from once a photo yields no face or two.
+    Their describe step is called one photo at a time because the driver asks
+    for exactly one label per image. Running the whole batch through it would
+    hand back a pile of descriptors with no way to say which photo each came
+    from, once a photo yields no face or two.
     """
 
     def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any) -> None:
@@ -138,15 +138,18 @@ class DiscoveredRecognition:
                 self._enroll(person_id, row)
 
     def recognize(self, images: Sequence[Any]) -> List[Optional[str]]:
-        """One answer per photo: a name they gave back, or None.
+        """One answer per photo: the first face their query put a name to.
 
-        When a photo yields several faces their query is asked about each, and
-        the first face it recognized is the answer. Their cutoff and their
-        rejection are the only things deciding; this picks no face and applies
-        no threshold. When it recognized nobody, or when their step found no
-        face at all, the answer is None, which is this contract's word for "I
-        do not know this person" and the honest thing to say about a photo
-        their system could not put a name to.
+        Their cutoff and their rejection are the only things deciding. This
+        picks no face and applies no threshold, and when their query named
+        nobody the answer is None, which is this contract's word for "I do not
+        know this person" and the honest thing to say about a photo their
+        system could not put a name to.
+
+        A photo holding two people they both know therefore gets one of them,
+        and which one is the order their describe step returned. The contract
+        asks for one label per image and these are single-face crops, so that
+        is a shape the benchmark's own data does not produce.
         """
 
         return [self._who(rows) for rows in self._describe(images)]
@@ -222,13 +225,16 @@ def build_recognition(submission: Any) -> DiscoveredRecognition:
     scenario, so this runs once per scenario and each one starts from a
     database their own code just made.
 
-    A team whose database is a module global has nothing to rebuild. That case
-    is not reachable from here: the search's own probing writes into a global
-    it cannot restore, so their query reads rows the benchmark put there and
-    the repository is refused before a run starts. If a shape ever did get
-    through, `fixture_a` and `fixture_b` are not names of this case, and
-    `roles.named` hands back only names the run enrolled, so a leaked answer
-    reads as unknown rather than as somebody.
+    A team whose database is a module global has nothing to rebuild, and this
+    cannot give them an empty one. What happens then depends on their code:
+    the search's probing writes into a global it cannot restore, and a store
+    that reads those rows back raises and is refused, while one that ignores
+    them binds and starts the run holding the two people the search enrolled.
+    `roles.named` keeps those two out of an answer, because it hands back only
+    names the run itself enrolled, but it cannot keep them from competing.
+    None of the audited repositories has that shape and reaches a run. The
+    isolation the SDK would need is a note in the phase report, not something
+    this can supply.
     """
 
     if not getattr(submission, "ready", False):

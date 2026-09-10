@@ -174,6 +174,14 @@ def whose_face(database, descriptor, cutoff=0.4):
 '''
 
 
+def adapter_for(found):
+    """The object a scored run gets, built the way the plugin builds it."""
+
+    from facial_recognition_benchmark.plugins import RecognitionBenchmark
+
+    return RecognitionBenchmark().submission_from_discovery(found)
+
+
 class _ARecognitionSearch(unittest.TestCase):
     """Runs the plugin's own discovery fields against a repository on disk."""
 
@@ -261,7 +269,7 @@ class AWholeLifecycleRunsOnADiscoveredRepository(_ARecognitionSearch):
 
     def test_the_people_enrolled_first_are_still_known_afterwards(self):
         found = self.resolve(NORMAL)
-        adapter = RecognitionBenchmarkAdapter(found)
+        adapter = adapter_for(found)
 
         adapter.enroll("ada", [photo(1), photo(2)])
         adapter.enroll("bea", [photo(4)])
@@ -272,12 +280,6 @@ class AWholeLifecycleRunsOnADiscoveredRepository(_ARecognitionSearch):
         self.assertEqual(
             adapter.recognize([photo(7), photo(1), photo(4)]), ["cass", "ada", "bea"]
         )
-
-
-def RecognitionBenchmarkAdapter(found):
-    from facial_recognition_benchmark.plugins import RecognitionBenchmark
-
-    return RecognitionBenchmark().submission_from_discovery(found)
 
 
 class EachScenarioStartsFromADatabaseTheirOwnCodeJustMade(_ARecognitionSearch):
@@ -344,29 +346,14 @@ def whose_face(descriptor, cutoff=0.4):
 class ADatabaseInAModuleGlobalIsNotIsolated(_ARecognitionSearch):
     """A limit of the platform, written down rather than worked around.
 
-    The search finds out what a team's functions do by calling them, in orders
-    that mostly do not work. When their database is a module global, what those
-    attempts leave behind stays there: below, the search's own probing files a
-    photo under the model object and the model object under a path. Their query
-    then reads those rows and raises, and the repository is refused.
-
-    Nothing at this layer can prevent it. The benchmark cannot know which of
-    their functions writes to a global before it calls one, and restoring a
-    module's globals between attempts belongs to whatever is doing the calling.
-    Refusing is the right outcome of the two available: the other is a score
-    computed against rows the benchmark put there itself.
+    Nothing at this layer can give a module global an empty database: the
+    benchmark cannot know which of their functions writes to one before it
+    calls it, and restoring a module's globals between attempts belongs to
+    whatever is doing the calling. What happens instead depends on their code.
+    This one reads back rows the search's probing left behind, raises, and is
+    refused, which is the better of the two outcomes available; the other is a
+    run scored against rows the benchmark put there itself.
     """
-
-    def test_the_searchs_own_probing_writes_into_their_global(self):
-        found = self.resolve(A_DATABASE_THAT_NEVER_RESETS)
-
-        theirs = found.discovery.namespace[0]
-        self.assertTrue(theirs._DB, "nothing was written, so this limit has moved")
-        self.assertNotEqual(
-            [key for key in theirs._DB if isinstance(key, str)],
-            list(theirs._DB),
-            "every key is a name the benchmark chose, so the probing was clean",
-        )
 
     def test_the_repository_is_refused_rather_than_scored_against_that(self):
         found = self.resolve(A_DATABASE_THAT_NEVER_RESETS)
@@ -384,7 +371,7 @@ class EveryQueryPhotoGetsExactlyOneAnswer(_ARecognitionSearch):
 
     def setUp(self):
         self.found = self.resolve(NORMAL)
-        self.adapter = RecognitionBenchmarkAdapter(self.found)
+        self.adapter = adapter_for(self.found)
         self.adapter.enroll("ada", [photo(1)])
         self.adapter.enroll("bea", [photo(4)])
 
@@ -457,8 +444,10 @@ class TheAnswerThatCanRejectIsTheOneThatBinds(_ARecognitionSearch):
     """Two of their own functions answer, and only one of them says "not this".
 
     Binding the first one reached would score that team zero on half the
-    benchmark using code they wrote. The acceptance test grades a rejection as
-    the fuller answer and the resolver keeps the best it has seen.
+    benchmark using code they wrote. Two things keep that from happening: a
+    bare ranking states no name, so it is not read as an answer at all, and a
+    query that names the stranger grades half against a full mark for one that
+    rejects. This is Bagel's `query` and `predict`, reduced.
     """
 
     def test_the_thresholded_answer_wins_over_the_bare_ranking(self):
@@ -720,7 +709,10 @@ class AnAnswerIsReadAgainstTheNamesTheBenchmarkEnrolled(unittest.TestCase):
         # with different fixes, and the scorer reports them apart.
         self.assertEqual(named("bea", self.KNOWN), "bea")
 
-    def test_every_spelling_of_unknown_in_the_corpus_reads_as_none(self):
+    def test_a_name_it_did_not_enrol_is_none_whatever_the_word(self):
+        # No table of sentinels: the rule is that a name this run did not
+        # enrol is not an identification, and every spelling of "unknown" the
+        # corpus writes falls out of it.
         for answer in ("Unknown", "unknown", "", "no match", "Nobody"):
             self.assertIsNone(named(answer, self.KNOWN), answer)
 
@@ -741,15 +733,91 @@ class AnAnswerIsReadAgainstTheNamesTheBenchmarkEnrolled(unittest.TestCase):
         self.assertIsNone(named(rejected, self.KNOWN))
         self.assertEqual(named(named_one, self.KNOWN), "ada")
 
-    def test_a_ranking_with_no_decision_in_it_reads_its_first_row(self):
-        self.assertEqual(
-            named([{"name": "ada", "similarity": 0.9}], self.KNOWN), "ada"
+    def test_the_decision_is_read_whichever_order_they_built_it_in(self):
+        # Reading deeper than the answer's own parts found the top-ranked name
+        # inside `results` and turned a rejection into an identification, so
+        # the same dictionary answered two ways depending on which key its
+        # author wrote first.
+        rejected = {"results": [{"name": "ada", "similarity": 0.9}], "prediction": "unknown"}
+        named_one = {"results": [{"name": "ada", "similarity": 0.9}], "prediction": "ada"}
+
+        self.assertIsNone(named(rejected, self.KNOWN))
+        self.assertEqual(named(named_one, self.KNOWN), "ada")
+
+    def test_a_rejection_spelled_as_nothing_is_not_overridden_by_the_ranking(self):
+        self.assertIsNone(
+            named({"prediction": None, "results": [{"name": "ada"}]}, self.KNOWN)
         )
+
+    def test_a_ranking_with_no_decision_in_it_is_not_read(self):
+        # A name inside a collection is not a name the answer states. No
+        # audited repository answers only this way; `DiscoverySpec.readers` is
+        # what the SDK provides for running one of their own functions over it.
+        self.assertIsNone(named([{"name": "ada", "similarity": 0.9}], self.KNOWN))
 
     def test_an_answer_with_no_name_in_it_is_none(self):
         self.assertIsNone(named(None, self.KNOWN))
         self.assertIsNone(named(0.4, self.KNOWN))
         self.assertIsNone(named([], self.KNOWN))
+
+
+#: A describe step that hands back the same buffer every time, which is a
+#: thing a team writes to avoid allocating, and a store that keeps what it is
+#: handed, which Bagel's does.
+A_REUSED_OUTPUT_BUFFER = '''
+import numpy as np
+
+_BUFFER = np.zeros((1, 32), dtype=float)
+
+
+def make_database():
+    return {}
+
+
+def describe(image, model):
+    boxes, probabilities, landmarks = model.detect(image)
+    described = model.compute_descriptors(image, boxes)
+    if len(described) == 0:
+        return np.zeros((0, 32), dtype=float)
+    _BUFFER[0] = described[0]
+    return _BUFFER
+
+
+def add_face(database, name, descriptor):
+    database.setdefault(name, []).append(np.asarray(descriptor).ravel())
+
+
+def whose_face(database, descriptor, cutoff=0.4):
+    best, closest = "Unknown", 3.0
+    for name, descriptors in database.items():
+        for other in descriptors:
+            distance = 1.0 - float(
+                np.dot(descriptor, other)
+                / (np.linalg.norm(descriptor) * np.linalg.norm(other))
+            )
+            if distance < closest:
+                best, closest = name, distance
+    return best if closest < cutoff else "Unknown"
+'''
+
+
+class WhatWasEnrolledStaysEnrolled(_ARecognitionSearch):
+    """A describe step may hand back the same array every time.
+
+    Their store keeps what it is given, so without a copy the second photo
+    overwrites the first person's descriptor and everybody becomes whoever was
+    described last.
+    """
+
+    def test_an_earlier_enrolment_survives_a_later_photo(self):
+        found = self.resolve(A_REUSED_OUTPUT_BUFFER)
+        self.assertTrue(found.ready, self.why())
+        adapter = adapter_for(found)
+
+        adapter.enroll("ada", [photo(1)])
+        adapter.enroll("bea", [photo(4)])
+
+        self.assertEqual(adapter.recognize([photo(1), photo(4)]), ["ada", "bea"])
 
 
 class OnePhotoAtATimeIsHowManyFacesTheStepFound(unittest.TestCase):
@@ -833,6 +901,20 @@ class ARepositoryThatFindsNoFaceIsRefusedAtTheStepThatFailed(_ARecognitionSearch
     not a face descriptor, so nothing binds and the refusal points at the step.
     """
 
+    def test_a_store_offered_nothing_is_not_a_store_that_worked(self):
+        # The acceptance test used to answer "enrolled two people" after making
+        # no calls at all, so every store passed the first pass and the student
+        # was told their query answered "no one".
+        from facial_recognition_benchmark.roles import _attempt, recognition_fixture
+
+        fixture = recognition_fixture(FIRST)
+        nothing = [[] for _ in fixture.photos]
+
+        passed, detail = _attempt(nothing, fixture, lambda *a: None, None)
+
+        self.assertFalse(passed)
+        self.assertIn("found no face", detail)
+
     def test_the_refusal_points_at_the_descriptors_step(self):
         found = self.resolve(A_STEP_THAT_FINDS_NO_FACE)
 
@@ -844,7 +926,7 @@ class ARepositoryThatFindsNoFaceIsRefusedAtTheStepThatFailed(_ARecognitionSearch
         # The other half of the same case: a step that works on the fixture
         # and finds nothing in one scored photo still owes an answer for it.
         found = self.resolve(NORMAL)
-        adapter = RecognitionBenchmarkAdapter(found)
+        adapter = adapter_for(found)
         adapter.enroll("ada", [photo(1)])
 
         self.assertEqual(adapter.recognize([photo(1), photo(), photo(1)]),

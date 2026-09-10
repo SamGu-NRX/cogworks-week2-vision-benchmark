@@ -114,7 +114,8 @@ class DiscoveredRecognitionResults(unittest.TestCase):
         # `query` ranks the nearest rows and never rejects; `predict` puts
         # their own cutoff in front of the same ranking. Binding the first one
         # reached would score this team zero on unknown rejection using code
-        # they wrote.
+        # they wrote, so the acceptance test grades a rejection above no
+        # rejection and reads no name out of a bare ranking.
         self.assertEqual(found.attempt.query, "vector_db.VectorDatabase().predict")
 
     def test_the_lifecycle_it_scores_is_theirs(self) -> None:
