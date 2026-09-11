@@ -183,7 +183,12 @@ def test_the_stranger_is_still_refused_before_and_named_after():
 
 
 def test_both_phases_ask_about_somebody_already_enrolled():
-    """A batch holding only the stranger is answerable with one constant label."""
+    """A batch holding only the stranger is answerable with one constant label.
+
+    True of every person with two or more held-out photos, which is every
+    person in the public manifests. A person with one is asked about only
+    after the enrolment; see ``_dealt_queries``.
+    """
 
     asked = []
 
@@ -197,3 +202,61 @@ def test_both_phases_ask_about_somebody_already_enrolled():
     assert len(asked) == 2
     for batch in asked:
         assert {1, 2} & set(batch), batch
+
+
+class AnswersByPositionWithoutLookingAtAPhoto:
+    """Never examines an image. Keeps the names it was handed and counts.
+
+    Under an unshuffled deal each batch is the known people in enrollment
+    order followed by the stranger's photos, so this is enough to answer every
+    question correctly without recognizing anything.
+    """
+
+    def __init__(self, model):
+        self.names = []
+        self.stranger = None
+        self.answered = False
+
+    def enroll(self, person_id, images):
+        if self.answered:
+            self.stranger = person_id
+        else:
+            self.names.append(person_id)
+
+    def recognize(self, images):
+        self.answered = True
+        known = len(images) - 1
+        return [
+            self.names[at] if at < known else self.stranger for at in range(len(images))
+        ]
+
+
+def test_answering_by_position_does_not_score():
+    """The batches are shuffled, so position says nothing about who is in a photo."""
+
+    scenario = retention_scenario()
+
+    output = run_recognition_scenario(
+        AnswersByPositionWithoutLookingAtAPhoto, object(), scenario
+    )
+    scores = score_recognition([output], [recognition_expected(scenario)])
+
+    assert scores["recognition_score"] != 1.0
+
+
+def test_the_same_case_is_asked_in_the_same_order_twice():
+    """A submission scored twice has to see the same questions."""
+
+    asked = []
+
+    class Watching(ClassBasedRecognition):
+        def recognize(self, images):
+            asked.append([int(item[0, 0, 0]) for item in images])
+            return super().recognize(images)
+
+    run_recognition_scenario(Watching, object(), retention_scenario())
+    first = list(asked)
+    asked.clear()
+    run_recognition_scenario(Watching, object(), retention_scenario())
+
+    assert asked == first

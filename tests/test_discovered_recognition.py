@@ -175,6 +175,20 @@ def whose_face(database, descriptor, cutoff=0.4):
 '''
 
 
+class _Answers:
+    """A chain step standing in for their describe step, answering one thing."""
+
+    form = None
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.call = self._call
+        self.bound = self._call
+
+    def _call(self, *args):
+        return self.answer
+
+
 def adapter_for(found):
     """The object a scored run gets, built the way the plugin builds it."""
 
@@ -1016,6 +1030,46 @@ class AMalformedAnswerIsAFailureNotARejection(_ARecognitionSearch):
             any("neither a name nor nobody" in str(said) for said in self.every_said),
             self.why(),
         )
+
+    def test_a_describe_step_that_says_nothing_is_refused_too(self):
+        # One layer up from the matcher, and the same laundering: no rows and
+        # no way of saying "no face here" used to become a rejection with the
+        # credit that carries.
+        from facial_recognition_benchmark.adapters import AdapterContractError
+        from facial_recognition_benchmark.discovered import DiscoveredRecognition
+
+        found = self.resolve(NORMAL)
+        ready = found.fresh()
+        broken = DiscoveredRecognition(ready.chain, ready.enroll, ready.query)
+        broken._chain = [_Answers({"error": "broken detector"})]
+
+        with self.assertRaises(AdapterContractError) as caught:
+            broken.recognize([photo(1)])
+
+        self.assertIn("not a way of saying there were none", str(caught.exception))
+
+    def test_a_describe_step_that_says_no_face_is_not(self):
+        from facial_recognition_benchmark.discovered import DiscoveredRecognition
+
+        found = self.resolve(NORMAL)
+        ready = found.fresh()
+        for nothing in (None, np.zeros((0, WIDTH)), [np.zeros((0, WIDTH))]):
+            quiet = DiscoveredRecognition(ready.chain, ready.enroll, ready.query)
+            quiet._chain = [_Answers(nothing)]
+
+            self.assertEqual(quiet.recognize([photo(1)]), [None], nothing)
+
+    def test_a_refusal_survives_a_repr_that_raises(self):
+        # Their object, their `__repr__`. A refusal that raised while writing
+        # itself escaped the acceptance test, and the resolver catches nothing
+        # from `accepts`, so it ended the whole search.
+        from facial_recognition_benchmark.roles import shortly
+
+        class Unprintable:
+            def __repr__(self):
+                raise ValueError("unfinished repr")
+
+        self.assertIn("repr() raised", shortly(Unprintable()))
 
     def test_a_photo_with_no_face_stays_a_rejection(self):
         # Their detector saw nothing to name. That is their system deciding,

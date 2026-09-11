@@ -118,9 +118,10 @@ def run_recognition_scenario(
     dict
         Labels for known, pre-enrollment unknown, and post-enrollment queries.
 
-    Two ``recognize`` calls with the enrolment between them, and each carries
-    questions about the people already enrolled. See ``_dealt_known_queries``
-    for why, and ``ShuffledQueryBatches`` for the hosted lane this matches.
+    Two ``recognize`` calls with the enrolment between them. Each person's
+    held-out photos are split across the two, so a person with two or more of
+    them is asked about on both sides of the enrolment. See ``_dealt_queries``
+    for why, and ``ShuffledQueryBatches`` for the hosted lane it follows.
     """
 
     adapter = adapt_recognition(instantiate(factory, model))
@@ -133,67 +134,93 @@ def run_recognition_scenario(
     if batches is not None:
         return _run_shuffled_queries(adapter, scenario, batches)
 
-    before_images, before_spans, after_images, after_spans = _dealt_known_queries(scenario)
-
-    first = list(before_images) + list(scenario.unknown_queries)
-    asked_before = _recognition_labels(
-        adapter.recognize(first), len(first), "before-enrollment"
-    )
+    first, second = _dealt_queries(scenario)
+    answers: Dict[Any, Optional[PersonId]] = {}
+    _ask(adapter, first, answers, "before-enrollment")
     adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
-    second = list(after_images) + list(scenario.post_enrollment_queries)
-    asked_after = _recognition_labels(
-        adapter.recognize(second), len(second), "after-enrollment"
-    )
+    _ask(adapter, second, answers, "after-enrollment")
 
     known: List[Optional[PersonId]] = []
-    for (at_before, count_before), (at_after, count_after) in zip(before_spans, after_spans):
-        known.extend(asked_before[at_before : at_before + count_before])
-        known.extend(asked_after[at_after : at_after + count_after])
+    for which, identity in enumerate(scenario.known):
+        known.extend(answers["known", which, at] for at in range(len(identity.queries)))
     return {
         "known": known,
-        "unknown_before": asked_before[len(before_images) :],
-        "post_enrollment": asked_after[len(after_images) :],
+        "unknown_before": [
+            answers["unknown", at] for at in range(len(scenario.unknown_queries))
+        ],
+        "post_enrollment": [
+            answers["post", at] for at in range(len(scenario.post_enrollment_queries))
+        ],
     }
 
 
-def _dealt_known_queries(scenario: RecognitionScenario):
-    """Each known identity's held-out photos, dealt into both asking phases.
+def _ask(adapter: Any, batch: Sequence[Any], answers: Dict[Any, Any], phase: str) -> None:
+    """One ``recognize`` call, with each answer filed under the slot it came from."""
+
+    labels = _recognition_labels(
+        adapter.recognize([image for _, image in batch]), len(batch), phase
+    )
+    for (slot, _), label in zip(batch, labels):
+        answers[slot] = label
+
+
+def _dealt_queries(scenario: RecognitionScenario):
+    """Every held-out photo, dealt into the two asking phases and shuffled.
 
     Recognition is not only naming somebody you were told about, it is still
     naming them after you have been told about somebody else. A submission
     that emptied its database every time it learned a new person answered
-    every question this benchmark asked, because every question about the
-    people it already knew came before the stranger was enrolled.
+    every question this benchmark used to ask, because every question about
+    the people it already knew came before the stranger was enrolled.
 
-    So half of each person's held-out photos are asked before and half after,
-    the way the hosted lane already deals them
-    (``cogworks_runner.week2_payload._query_plan``), and for the same reason
-    it gives: a batch holding only the stranger's photos is answerable with
-    one constant label and without looking at any pixels.
+    So half of each person's held-out photos are asked before the enrolment
+    and half after. The hosted lane already deals its two batches that way
+    (``cogworks_runner.week2_payload._query_plan``) and gives the reason: a
+    batch holding only the stranger's photos is answerable with one constant
+    label and without looking at any pixels.
 
-    The odd photo goes to the second phase, as it does there. A person with
-    one held-out photo is therefore asked about only after the enrolment,
-    which is the half that is harder to fake.
+    Then both batches are shuffled, and that is not decoration either. Without
+    it each batch is the known people in enrolment order followed by the
+    stranger's photos, and a submission that keeps the names it was given and
+    answers by position scores full marks without looking at a photograph.
+    Measured: exactly that submission scored 1.0 before this shuffle.
 
-    Returns the photos for each phase and, for each identity, where that
-    person's answers sit inside each phase, so the caller can put ``known``
-    back into the order ``recognition_expected`` builds its gold in. That
-    order is unchanged, and so is the gold: only where the question is asked
-    has moved.
+    The permutation is a digest of the scenario's own names, so two runs of one
+    case ask in the same order. That is a weaker guarantee than the hosted
+    lane's, whose seed is deliberately one the sandbox cannot recompute; here
+    a student can read this function and work the order out. Locally that buys
+    them nothing, because the case is theirs to read anyway, and the hosted
+    run they publish against still hides it.
+
+    Two places this does not match the hosted deal, stated rather than
+    papered over. It splits each person's photos rather than shuffling all the
+    known slots and splitting the total, so every person with two or more
+    held-out photos is asked about on both sides instead of a random subset
+    being. And a person with a single held-out photo is asked about only
+    after the enrolment, where the hosted split can put theirs either side.
     """
 
-    before_images: List[Image] = []
-    after_images: List[Image] = []
-    before_spans = []
-    after_spans = []
-    for identity in scenario.known:
+    import hashlib
+    import random
+
+    before: List[Any] = []
+    after: List[Any] = []
+    for which, identity in enumerate(scenario.known):
         queries = list(identity.queries)
         split = len(queries) // 2
-        before_spans.append((len(before_images), split))
-        before_images.extend(queries[:split])
-        after_spans.append((len(after_images), len(queries) - split))
-        after_images.extend(queries[split:])
-    return before_images, before_spans, after_images, after_spans
+        for at, photo in enumerate(queries):
+            slot = ("known", which, at)
+            (before if at < split else after).append((slot, photo))
+    before.extend((("unknown", at), photo) for at, photo in enumerate(scenario.unknown_queries))
+    after.extend((("post", at), photo) for at, photo in enumerate(scenario.post_enrollment_queries))
+
+    names = "|".join([identity.person_id for identity in scenario.known] +
+                     [scenario.unknown_person_id])
+    seed = int(hashlib.sha256(names.encode("utf-8")).hexdigest()[:16], 16)
+    shuffle = random.Random(seed)
+    shuffle.shuffle(before)
+    shuffle.shuffle(after)
+    return before, after
 
 
 def _run_shuffled_queries(
