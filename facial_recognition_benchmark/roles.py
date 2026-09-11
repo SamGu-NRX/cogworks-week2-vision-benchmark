@@ -924,9 +924,10 @@ def _asked(query_call, rows, known):
     """Who the store says is in the first face of one photo, or a refusal.
 
     Returns ``(name_or_None, None)`` on an answer and ``(None, detail)`` when
-    their query raised. The two are separated because a query that raises is a
-    binding that does not work, and a query that answers "nobody" is a working
-    binding making a decision.
+    their query raised or answered something this cannot read. Those are kept
+    apart from a plain ``(None, None)`` because a query that raises or answers
+    unreadably is a binding that does not work, and a query that answers
+    "nobody" is a working binding making a decision.
     """
 
     if not rows:
@@ -935,6 +936,14 @@ def _asked(query_call, rows, known):
         answer = query_call(rows[0].copy())
     except BaseException as error:  # noqa: BLE001 - student code raises anything
         return None, f"querying raised {type(error).__name__}: {str(error)[:120]}"
+    if not readable(answer):
+        # Refused here rather than left to fail mid-run. The scored adapter
+        # raises on this shape, so accepting it would prove a binding the run
+        # cannot execute, which is the one thing the search must never do.
+        return None, (
+            f"querying answered {repr(answer)[:80]}, which says neither a name "
+            "nor nobody"
+        )
     return named(answer, known), None
 
 

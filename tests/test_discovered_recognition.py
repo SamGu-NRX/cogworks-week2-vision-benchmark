@@ -207,12 +207,14 @@ class _ARecognitionSearch(unittest.TestCase):
         fixture = self.fixture_for(scenario)
         forms = Fixtures(((fixture.photos,), (write_photos(fixture.photos),)))
         self.said = {}
+        self.every_said = []
 
         def accepts(chain, enroll, query):
             passed, detail = recognition_accepts(
                 chain, forms.for_chain(chain)[0], fixture, enroll, query
             )
             self.said.setdefault(tuple(step.label for step in chain), detail)
+            self.every_said.append(detail)
             return passed, detail
 
         return resolve(
@@ -416,14 +418,12 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
     their problem.
     """
 
-    def notes_after(self, images, enrol=None, query=None):
+    def notes_after(self, images, enrol=None):
         from facial_recognition_benchmark.plugins import RecognitionBenchmark
 
         plugin = RecognitionBenchmark()
         found = self.resolve(NORMAL)
         adapter = plugin.submission_from_discovery(found)
-        if query is not None:
-            adapter._query = query
         adapter.enroll("ada", enrol if enrol is not None else [photo(1)])
         adapter.recognize(images)
         plugin.score(
@@ -450,11 +450,6 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
         notes = self.notes_after([photo(1, 2, 3)])
 
         self.assertTrue(any("extra faces" in note for note in notes), notes)
-
-    def test_an_answer_it_could_not_read_is_said(self):
-        notes = self.notes_after([photo(1)], query=lambda descriptor: 0.4)
-
-        self.assertTrue(any("said nothing this could read" in note for note in notes), notes)
 
     def test_a_clean_run_says_none_of_it(self):
         from facial_recognition_benchmark.plugins import RecognitionBenchmark, _describing_notes
@@ -927,6 +922,109 @@ class WhatWasEnrolledStaysEnrolled(_ARecognitionSearch):
         adapter.enroll("bea", [photo(4)])
 
         self.assertEqual(adapter.recognize([photo(1), photo(4)]), ["ada", "bea"])
+
+
+#: A team whose "not this person" path answers with a number instead of a
+#: name or a None. Their identification still works, so nothing else in the
+#: run looks wrong.
+A_REJECTION_THAT_IS_NOT_A_REJECTION = '''
+import numpy as np
+
+
+def make_database():
+    return {}
+
+
+def describe(image, model):
+    boxes, probabilities, landmarks = model.detect(image)
+    return model.compute_descriptors(image, boxes)
+
+
+def add_face(database, name, descriptor):
+    database.setdefault(name, []).append(descriptor)
+
+
+def whose_face(database, descriptor, cutoff=0.4):
+    best, closest = None, 3.0
+    for name, descriptors in database.items():
+        for other in descriptors:
+            distance = 1.0 - float(
+                np.dot(descriptor, other)
+                / (np.linalg.norm(descriptor) * np.linalg.norm(other))
+            )
+            if distance < closest:
+                best, closest = name, distance
+    return best if closest < cutoff else 0.0
+'''
+
+
+class AMalformedAnswerIsAFailureNotARejection(_ARecognitionSearch):
+    """`unknown_rejection_recall` counts None, and None is what this used to
+    make of an answer that said nothing at all.
+
+    A submission that answers with a number for every stranger would have
+    scored a perfect rejection recall on output that never rejected anything.
+    A submission that declares itself gets `AdapterContractError` for the same
+    offence, so both paths raise it and the runner categorizes it the same way.
+    """
+
+    def scored_with(self, query):
+        """The real driver and the real scorer over one lifecycle."""
+
+        from facial_recognition_benchmark.discovered import DiscoveredRecognition
+
+        found = self.resolve(NORMAL)
+        chain = found.fresh().chain
+
+        def build(*args, **kwargs):
+            ready = found.fresh()
+            return DiscoveredRecognition(chain, ready.enroll, query(ready.query))
+
+        output = run_recognition_scenario(build, FakeFaceNet(), FIRST)
+        return output, score_recognition([output], [recognition_expected(FIRST)])
+
+    def test_a_rejection_that_says_none_is_credited(self):
+        output, scores = self.scored_with(lambda theirs: theirs)
+
+        self.assertEqual(output["unknown_before"], [None])
+        self.assertEqual(scores["unknown_rejection_recall"], 1.0)
+
+    def test_an_answer_that_says_nothing_is_refused_instead_of_credited(self):
+        from facial_recognition_benchmark.adapters import AdapterContractError
+
+        def answers_with_a_number(theirs):
+            """Their rejection, spelled as a number rather than as a name."""
+
+            def query(descriptor):
+                answer = theirs(descriptor)
+                return 0.0 if answer in (None, "Unknown") else answer
+
+            return query
+
+        with self.assertRaises(AdapterContractError) as caught:
+            self.scored_with(answers_with_a_number)
+
+        self.assertIn("neither a name nor nobody", str(caught.exception))
+
+    def test_the_search_refuses_it_rather_than_leaving_it_to_the_run(self):
+        # Accepting a binding the run cannot execute is the one thing the
+        # search must never do.
+        found = self.resolve(A_REJECTION_THAT_IS_NOT_A_REJECTION)
+
+        self.assertFalse(found.ready)
+        self.assertTrue(
+            any("neither a name nor nobody" in str(said) for said in self.every_said),
+            self.why(),
+        )
+
+    def test_a_photo_with_no_face_stays_a_rejection(self):
+        # Their detector saw nothing to name. That is their system deciding,
+        # not a shape this cannot read, and it is scored as unknown.
+        found = self.resolve(NORMAL)
+        adapter = adapter_for(found)
+        adapter.enroll("ada", [photo(1)])
+
+        self.assertEqual(adapter.recognize([photo()]), [None])
 
 
 class OnePhotoAtATimeIsHowManyFacesTheStepFound(unittest.TestCase):

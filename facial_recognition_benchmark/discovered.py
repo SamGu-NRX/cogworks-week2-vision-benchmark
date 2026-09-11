@@ -135,9 +135,8 @@ class DiscoveredRecognition:
         # what it asked them to remember, and it is what lets an answer be
         # read back as an identification or as none.
         self._known: set = set()
-        # What happened to a photo before their matcher saw it, and what came
-        # back that this could not read. Counted rather than dropped, because
-        # all of it ends as None: a run of them scores exactly what a
+        # What their describe step found. Counted rather than dropped, because
+        # it ends as None either way: a run of it scores exactly what a
         # submission that answers None to everything scores, and the metric's
         # own diagnostics read that as a cutoff being strict. `score` says so.
         #
@@ -148,7 +147,6 @@ class DiscoveredRecognition:
         self.photos_not_enrolled = 0
         self.photos_not_answered = 0
         self.faces_not_asked_about = 0
-        self.answers_not_read = 0
 
     def enroll(self, person_id: str, images: Sequence[Any]) -> None:
         """File the first face in each of these photos under one name."""
@@ -168,8 +166,21 @@ class DiscoveredRecognition:
         is None, which is this contract's word for "I do not know this person"
         and the honest thing to say about a photo their system could not put a
         name to.
+
+        An answer that says neither a name nor nobody is a contract failure,
+        not a rejection. Scoring it as one would hand a submission the credit
+        for saying "I do not know this person" on output that never said
+        anything, and `unknown_rejection_recall` counts exactly that. A
+        submission that declares itself gets `AdapterContractError` from
+        `drivers._recognition_labels` for the same offence, so both paths
+        raise the same error and the runner categorizes it the same way.
+
+        A photo their describe step found no face in is separate and stays a
+        rejection: their system saw nothing to name, which is a thing their
+        detector decided rather than a shape this cannot read.
         """
 
+        from .adapters import AdapterContractError
         from .roles import named, readable
 
         answers: List[Optional[str]] = []
@@ -180,7 +191,11 @@ class DiscoveredRecognition:
                 continue
             answer = self._query(rows[0])
             if not readable(answer):
-                self.answers_not_read += 1
+                raise AdapterContractError(
+                    f"Your matching function answered {_shortly(answer)} for one "
+                    "photo, which says neither a name nor nobody. Return a name, "
+                    "or None, or a tuple or mapping stating exactly one of those."
+                )
             answers.append(named(answer, self._known))
         return answers
 
@@ -205,6 +220,13 @@ class DiscoveredRecognition:
             described = [descriptors_in(_run(self._chain, [photo])) for photo in photos]
         self.faces_not_asked_about += sum(len(rows) - 1 for rows in described if rows)
         return described
+
+
+def _shortly(value: Any) -> str:
+    """An answer, short enough to put in one sentence."""
+
+    text = repr(value)
+    return text if len(text) <= 80 else text[:77] + "..."
 
 
 @contextlib.contextmanager

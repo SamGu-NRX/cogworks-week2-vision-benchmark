@@ -397,12 +397,16 @@ class ClusteringBenchmark:
 
 
 def _describing_notes(adapters: Sequence[Any]) -> List[str]:
-    """What their describe step and their query did that a metric cannot show.
+    """What their describe step found, which no metric can show.
 
-    All three of these end as None, which the scorer counts as saying "I do
-    not know this person". A run full of them scores what a submission that
+    Both of these end as None, which the scorer counts as saying "I do not
+    know this person". A run full of them scores what a submission that
     answers None to everything scores, and the metric's diagnostics then send
     the team to their cutoff, which is the one thing that is not the problem.
+
+    An answer their matching function gave that says neither a name nor
+    nobody is not here. That is a contract failure and `DiscoveredRecognition`
+    raises for it, the same as a declared submission does.
     """
 
     def total(name: str) -> int:
@@ -435,14 +439,6 @@ def _describing_notes(adapters: Sequence[Any]) -> List[str]:
             " each. This benchmark asks about the first face your step returns"
             " and counts the rest, so a second detection costs nothing here,"
             " but it is worth knowing your detector found one."
-        )
-    unread = total("answers_not_read")
-    if unread:
-        notes.append(
-            f"{count(unread, 'answer')} from your matching function said"
-            " nothing this could read as a name or as nobody, and was scored as"
-            " unknown. A name, or None, or a tuple or dictionary holding"
-            " exactly one of those, is what it reads."
         )
     return notes
 
