@@ -110,7 +110,6 @@ class DiscoveredRecognition:
 
     # One photo, one face: the first their describe step returned, on both
     # sides. A contract that asks for one label per photo has to reduce their
-    # A contract that asks for one label per photo has to reduce their
     # per-face answer to a per-photo one somewhere, and every way of doing it
     # leans, so this picks the way that leans least and says which way.
     #

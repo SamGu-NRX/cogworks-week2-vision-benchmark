@@ -457,13 +457,14 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
         self.assertTrue(any("said nothing this could read" in note for note in notes), notes)
 
     def test_a_clean_run_says_none_of_it(self):
-        notes = self.notes_after([photo(1)])
+        from facial_recognition_benchmark.plugins import RecognitionBenchmark, _describing_notes
 
-        self.assertEqual(
-            [note for note in notes if "your step" in note.lower() or "answer" in note],
-            [],
-            notes,
-        )
+        plugin = RecognitionBenchmark()
+        adapter = plugin.submission_from_discovery(self.resolve(NORMAL))
+        adapter.enroll("ada", [photo(1)])
+        adapter.recognize([photo(1)])
+
+        self.assertEqual(_describing_notes([adapter]), [])
 
     def test_each_run_reports_only_its_own(self):
         # The adapters are kept on the plugin so `score` can read them, so a

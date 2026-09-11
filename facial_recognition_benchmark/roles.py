@@ -900,6 +900,12 @@ def _attempt(described, fixture, enroll_call, query_call):
         return True, f"enrolled {who} from {enrolled} descriptors"
 
     known = frozenset(name for name, _ in fixture.enrollment)
+    if not described[fixture.query]:
+        # Their detector, not their matcher. Saying "got no one" here would
+        # send them to the cutoff over a photo nothing was ever asked about.
+        return False, (
+            f"found no face in the photo of {fixture.query_of} it was going to ask about"
+        )
     asked, said = _asked(query_call, described[fixture.query], known)
     if said is not None:
         return False, said

@@ -415,11 +415,11 @@ def _describing_notes(adapters: Sequence[Any]) -> List[str]:
     unenrolled = total("photos_not_enrolled")
     if unenrolled:
         notes.append(
-            f"Your step that describes a photo found no face in "
-            f"{count(unenrolled, 'photo')} the benchmark asked you to remember"
-            " somebody from, so that person was enrolled from fewer photos than"
-            " it looks like, or from none. Check the detection probability you"
-            " keep faces above."
+            f"Of the photos the benchmark asked you to remember somebody"
+            f" from, your step that describes a photo found no face in"
+            f" {count(unenrolled, 'one')}. Those people were enrolled from"
+            " fewer photos than it looks like, or from none. Check the"
+            " detection probability you keep faces above."
         )
     unanswered = total("photos_not_answered")
     if unanswered:
