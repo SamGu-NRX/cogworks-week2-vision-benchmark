@@ -187,7 +187,7 @@ def test_both_phases_ask_about_somebody_already_enrolled():
 
     True of every person with two or more held-out photos, which is every
     person in the public manifests. A person with one is asked about only
-    after the enrolment; see ``_dealt_queries``.
+    after the enrolment; see ``query_phases``.
     """
 
     asked = []
@@ -235,7 +235,7 @@ def test_answering_by_position_no_longer_scores_perfectly():
     """Shuffling the batches costs a submission that answers by position.
 
     It does not make a local score mean recognition. The names and counts are
-    in the public manifest and `_dealt_queries` is readable, so a submission
+    in the public manifest and `__local_query_seed` is readable, so a submission
     that recomputes the seed and replays the permutation still scores 1.0
     without opening a photograph. Nothing local can close that, because the
     submission runs in this process; the hosted lane is where the seed is
@@ -277,7 +277,7 @@ def test_every_query_is_asked_exactly_once_in_one_phase_or_the_other():
     from facial_recognition_benchmark.drivers import query_phases
 
     for counts in ((2, 2, 2), (1, 1), (3,), (0, 2, 5), (2, 2)):
-        before, after = query_phases(counts, 2, 3, seed=7)
+        before, after = query_phases(counts, unknown_count=2, post_count=3, seed=7)
         total = sum(counts) + 2 + 3
 
         assert sorted(before + after) == list(range(total)), counts
@@ -294,7 +294,7 @@ def test_each_person_is_asked_about_on_both_sides_of_the_enrollment():
     from facial_recognition_benchmark.drivers import query_phases
 
     counts = (2, 2, 4)
-    before, after = query_phases(counts, 1, 1, seed=7)
+    before, after = query_phases(counts, unknown_count=1, post_count=1, seed=7)
 
     at = 0
     for count in counts:
@@ -307,10 +307,10 @@ def test_each_person_is_asked_about_on_both_sides_of_the_enrollment():
 def test_the_deal_is_the_same_for_the_same_seed_and_different_for_another():
     from facial_recognition_benchmark.drivers import query_phases
 
-    once = query_phases((2, 2), 1, 1, seed=7)
+    once = query_phases((2, 2), unknown_count=1, post_count=1, seed=7)
 
-    assert query_phases((2, 2), 1, 1, seed=7) == once
-    assert query_phases((2, 2), 1, 1, seed=8) != once
+    assert query_phases((2, 2), unknown_count=1, post_count=1, seed=7) == once
+    assert query_phases((2, 2), unknown_count=1, post_count=1, seed=8) != once
 
 
 def test_the_strangers_photos_land_on_the_side_that_can_answer_them():
@@ -318,7 +318,7 @@ def test_the_strangers_photos_land_on_the_side_that_can_answer_them():
 
     from facial_recognition_benchmark.drivers import query_phases
 
-    before, after = query_phases((2, 2), 2, 3, seed=7)
+    before, after = query_phases((2, 2), unknown_count=2, post_count=3, seed=7)
 
     assert {4, 5} <= set(before)          # the pre-enrollment stranger photos
     assert {6, 7, 8} <= set(after)        # the post-enrollment ones
@@ -338,3 +338,27 @@ def test_the_canonical_order_is_the_order_the_gold_is_built_in():
     # ada's photos carry a 1, bea's a 2, the stranger's a 3.
     assert [int(item[0, 0, 0]) for item in images] == [1, 1, 2, 2, 3, 3]
     assert expected == ["ada", "ada", "bea", "bea", None, "cass"]
+
+
+def test_the_deal_is_these_exact_tuples():
+    """A golden case, because the deal is now part of what a score means.
+
+    Both lanes call this, and the hosted controller runs whatever Python its
+    image carries while students run the course's 3.8. `random.Random(int)` is
+    the Mersenne Twister and `shuffle` has drawn from it the same way since
+    3.2, so the two agree today; this is what would notice if that stopped
+    being true, or if somebody adjusted the split and expected only a test
+    about properties to complain.
+
+    Three people with three, two and four held-out photos, so slots 0-2, 3-4
+    and 5-8 are theirs, 9-10 are the stranger's from before the enrolment and
+    11-13 from after. Each person's photos split odd-one-after: 1, 1 and 2
+    before.
+    """
+
+    from facial_recognition_benchmark.drivers import query_phases
+
+    before, after = query_phases((3, 2, 4), unknown_count=2, post_count=3, seed=12345)
+
+    assert before == (10, 9, 3, 5, 0, 6)
+    assert after == (11, 12, 1, 4, 2, 7, 13, 8)

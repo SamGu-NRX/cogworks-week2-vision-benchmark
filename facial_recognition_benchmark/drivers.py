@@ -120,8 +120,8 @@ def run_recognition_scenario(
 
     Two ``recognize`` calls with the enrolment between them. Each person's
     held-out photos are split across the two, so a person with two or more of
-    them is asked about on both sides of the enrolment. See ``_dealt_queries``
-    for why, and ``ShuffledQueryBatches`` for the hosted lane it follows.
+    them is asked about on both sides of the enrolment. See ``query_phases``
+    for why, and ``ShuffledQueryBatches`` for the hosted lane it shares it with.
     """
 
     adapter = adapt_recognition(instantiate(factory, model))
@@ -135,20 +135,26 @@ def run_recognition_scenario(
         return _run_shuffled_queries(adapter, scenario, batches)
 
     images = canonical_query_images(scenario)
+    known_query_counts = tuple(len(identity.queries) for identity in scenario.known)
+    known_count = sum(known_query_counts)
+    unknown_count = len(scenario.unknown_queries)
     before_slots, after_slots = query_phases(
-        tuple(len(identity.queries) for identity in scenario.known),
-        len(scenario.unknown_queries),
-        len(scenario.post_enrollment_queries),
-        local_query_seed(scenario),
+        known_query_counts,
+        unknown_count=unknown_count,
+        post_count=len(scenario.post_enrollment_queries),
+        seed=_local_query_seed(scenario),
     )
 
+    # Every slot is written exactly once, because `query_phases` partitions
+    # them and a test there pins that. So a `None` here is a real prediction,
+    # not an unasked slot, and the two do not need telling apart. The hosted
+    # lane keeps an `_UNFILLED` sentinel for the same array because its slots
+    # arrive from a submission's answer batches, which can be short.
     answers: List[Optional[PersonId]] = [None] * len(images)
     _ask(adapter, images, before_slots, answers, "before-enrollment")
     adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
     _ask(adapter, images, after_slots, answers, "after-enrollment")
 
-    known_count = sum(len(identity.queries) for identity in scenario.known)
-    unknown_count = len(scenario.unknown_queries)
     return {
         "known": answers[:known_count],
         "unknown_before": answers[known_count : known_count + unknown_count],
@@ -189,7 +195,7 @@ def canonical_query_images(scenario: RecognitionScenario) -> List[Image]:
     return images
 
 
-def local_query_seed(scenario: RecognitionScenario) -> int:
+def _local_query_seed(scenario: RecognitionScenario) -> int:
     """The permutation a local run asks in, derived from the case's own names.
 
     Stable, because a submission scored twice has to see the same questions.
@@ -212,6 +218,7 @@ def local_query_seed(scenario: RecognitionScenario) -> int:
 
 def query_phases(
     known_query_counts: Sequence[int],
+    *,
     unknown_count: int,
     post_count: int,
     seed: int,
@@ -240,7 +247,19 @@ def query_phases(
 
     What the shuffle is worth depends on whether the caller's ``seed`` can be
     recomputed by the submission, and that is the caller's question rather than
-    this one's. See ``local_query_seed`` for what the local lane can promise.
+    this one's. See ``_local_query_seed`` for what the local lane can promise.
+
+    The seed only orders the photos within a phase; which phase a photo lands
+    in comes from the counts alone. So two lanes with different seeds ask the
+    same person about the same photos on the same side of the enrolment, and a
+    submission that does not depend on the order of a batch scores the same in
+    both. That is what lets the hosted lane keep its seed secret without
+    keeping a second lifecycle.
+
+    The three counts are keyword-only because ``unknown_count`` and
+    ``post_count`` are adjacent integers that a caller can transpose silently:
+    the partition still covers every slot, so it looks right, and the
+    stranger's photos simply land on the wrong sides.
     """
 
     import random
