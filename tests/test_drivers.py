@@ -269,3 +269,72 @@ def test_the_same_case_is_asked_in_the_same_order_twice():
     run_recognition_scenario(Watching, object(), retention_scenario())
 
     assert asked == first
+
+
+def test_every_query_is_asked_exactly_once_in_one_phase_or_the_other():
+    """The deal is a partition of the canonical slots, not a selection."""
+
+    from facial_recognition_benchmark.drivers import query_phases
+
+    for counts in ((2, 2, 2), (1, 1), (3,), (0, 2, 5), (2, 2)):
+        before, after = query_phases(counts, 2, 3, seed=7)
+        total = sum(counts) + 2 + 3
+
+        assert sorted(before + after) == list(range(total)), counts
+
+
+def test_each_person_is_asked_about_on_both_sides_of_the_enrollment():
+    """The property the pooled split does not give: coverage per person.
+
+    Half of each person's own held-out photos before, half after, so
+    forgetting somebody costs that person's score rather than a random
+    subset's.
+    """
+
+    from facial_recognition_benchmark.drivers import query_phases
+
+    counts = (2, 2, 4)
+    before, after = query_phases(counts, 1, 1, seed=7)
+
+    at = 0
+    for count in counts:
+        theirs = set(range(at, at + count))
+        assert theirs & set(before), (count, at)
+        assert theirs & set(after), (count, at)
+        at += count
+
+
+def test_the_deal_is_the_same_for_the_same_seed_and_different_for_another():
+    from facial_recognition_benchmark.drivers import query_phases
+
+    once = query_phases((2, 2), 1, 1, seed=7)
+
+    assert query_phases((2, 2), 1, 1, seed=7) == once
+    assert query_phases((2, 2), 1, 1, seed=8) != once
+
+
+def test_the_strangers_photos_land_on_the_side_that_can_answer_them():
+    """Before the enrolment nobody can name the stranger; after, everybody should."""
+
+    from facial_recognition_benchmark.drivers import query_phases
+
+    before, after = query_phases((2, 2), 2, 3, seed=7)
+
+    assert {4, 5} <= set(before)          # the pre-enrollment stranger photos
+    assert {6, 7, 8} <= set(after)        # the post-enrollment ones
+
+
+def test_the_canonical_order_is_the_order_the_gold_is_built_in():
+    """Slot i and gold entry i have to be the same photograph."""
+
+    from facial_recognition_benchmark.drivers import canonical_query_images
+
+    scenario = retention_scenario()
+    images = canonical_query_images(scenario)
+    gold = recognition_expected(scenario)
+    expected = gold["known"] + gold["unknown_before"] + gold["post_enrollment"]
+
+    assert len(images) == len(expected)
+    # ada's photos carry a 1, bea's a 2, the stranger's a 3.
+    assert [int(item[0, 0, 0]) for item in images] == [1, 1, 2, 2, 3, 3]
+    assert expected == ["ada", "ada", "bea", "bea", None, "cass"]

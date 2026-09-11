@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -134,106 +134,135 @@ def run_recognition_scenario(
     if batches is not None:
         return _run_shuffled_queries(adapter, scenario, batches)
 
-    first, second = _dealt_queries(scenario)
-    answers: Dict[Any, Optional[PersonId]] = {}
-    _ask(adapter, first, answers, "before-enrollment")
-    adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
-    _ask(adapter, second, answers, "after-enrollment")
+    images = canonical_query_images(scenario)
+    before_slots, after_slots = query_phases(
+        tuple(len(identity.queries) for identity in scenario.known),
+        len(scenario.unknown_queries),
+        len(scenario.post_enrollment_queries),
+        local_query_seed(scenario),
+    )
 
-    known: List[Optional[PersonId]] = []
-    for which, identity in enumerate(scenario.known):
-        known.extend(answers["known", which, at] for at in range(len(identity.queries)))
+    answers: List[Optional[PersonId]] = [None] * len(images)
+    _ask(adapter, images, before_slots, answers, "before-enrollment")
+    adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
+    _ask(adapter, images, after_slots, answers, "after-enrollment")
+
+    known_count = sum(len(identity.queries) for identity in scenario.known)
+    unknown_count = len(scenario.unknown_queries)
     return {
-        "known": known,
-        "unknown_before": [
-            answers["unknown", at] for at in range(len(scenario.unknown_queries))
-        ],
-        "post_enrollment": [
-            answers["post", at] for at in range(len(scenario.post_enrollment_queries))
-        ],
+        "known": answers[:known_count],
+        "unknown_before": answers[known_count : known_count + unknown_count],
+        "post_enrollment": answers[known_count + unknown_count :],
     }
 
 
-def _ask(adapter: Any, batch: Sequence[Any], answers: Dict[Any, Any], phase: str) -> None:
+def _ask(
+    adapter: Any,
+    images: Sequence[Image],
+    slots: Sequence[int],
+    answers: List[Optional[PersonId]],
+    phase: str,
+) -> None:
     """One ``recognize`` call, with each answer filed under the slot it came from."""
 
-    labels = _recognition_labels(
-        adapter.recognize([image for _, image in batch]), len(batch), phase
-    )
-    for (slot, _), label in zip(batch, labels):
+    batch = [images[slot] for slot in slots]
+    labels = _recognition_labels(adapter.recognize(batch), len(batch), phase)
+    for slot, label in zip(slots, labels):
         answers[slot] = label
 
 
-def _dealt_queries(scenario: RecognitionScenario):
-    """Every held-out photo, dealt into the two asking phases and shuffled.
+def canonical_query_images(scenario: RecognitionScenario) -> List[Image]:
+    """Every held-out photo in the order the gold is built in.
 
-    Recognition is not only naming somebody you were told about, it is still
-    naming them after you have been told about somebody else. A submission
-    that emptied its database every time it learned a new person answered
-    every question this benchmark used to ask, because every question about
-    the people it already knew came before the stranger was enrolled.
+    Each known identity's photos in turn, then the stranger's photos from
+    before the enrolment, then the ones from after. ``recognition_expected``
+    builds its answer vector in exactly this order, so slot *i* here and entry
+    *i* there are the same photograph. Both lanes number slots this way, which
+    is what lets them share ``query_phases``.
+    """
 
-    So half of each person's held-out photos are asked before the enrolment
-    and half after. The hosted lane splits its two batches for the reason it
-    states (``cogworks_runner.week2_payload._query_plan``): a batch holding
-    only the stranger's photos is answerable with one constant label and
-    without looking at any pixels. It is the same lifecycle; it is not the same
-    deal, and the difference is below.
+    images: List[Image] = []
+    for identity in scenario.known:
+        images.extend(identity.queries)
+    images.extend(scenario.unknown_queries)
+    images.extend(scenario.post_enrollment_queries)
+    return images
 
-    Then both batches are shuffled, and that is not decoration either. Without
-    it each batch is the known people in enrolment order followed by the
-    stranger's photos, and a submission that keeps the names it was given and
-    answers by position scores full marks without looking at a photograph.
-    Measured: exactly that submission scored 1.0 before this shuffle.
 
-    The permutation is a digest of the scenario's own names, so two runs of one
-    case ask in the same order, which a submission scored twice needs.
+def local_query_seed(scenario: RecognitionScenario) -> int:
+    """The permutation a local run asks in, derived from the case's own names.
 
-    What that does and does not achieve, measured. It defeats a submission that
-    answers by position: one that keeps the names it was handed and returns
-    them in order scored 1.0 before this and 0.125 after. It does not make a
-    local score mean recognition. The names and the counts are in the public
-    manifest and this function is readable, so a submission can recompute the
-    seed, replay the permutation and score 1.0 without opening a photograph;
-    that was reproduced on both public tiers.
-
-    Nothing here can close that, and no amount of cleverness would: the
-    submission runs in this process, so anything this knows it can read. The
-    hosted lane is where the seed is genuinely hidden, which is why the local
-    command prints LOCAL and SELF-REPORTED and the hosted run is the one a
-    team publishes against.
-
-    Where this and the hosted deal differ, stated rather than papered over.
-    Hosted shuffles all the known slots together and splits the total, so a
-    person can land wholly on one side; this splits each person's own photos,
-    so everybody with two or more is asked about on both sides. That is
-    deliberate, because after-enrolment coverage for every person is the
-    property this exists for, but it is a different distribution and not only
-    a different order. With a single held-out photo the two diverge further:
-    this asks only after the enrolment, hosted can put it either side.
+    Stable, because a submission scored twice has to see the same questions.
+    Not secret, and not pretending to be: the names are in the public manifest
+    and this function is readable, so a submission can recompute it, replay the
+    permutation and score without opening a photograph. That was reproduced on
+    both public tiers. Nothing local can close it, because the submission runs
+    in this process and can read anything this knows, which is why the local
+    command prints LOCAL and SELF-REPORTED. The hosted lane supplies its own
+    seed, and hiding it is that lane's problem to solve.
     """
 
     import hashlib
+
+    names = "|".join(
+        [identity.person_id for identity in scenario.known] + [scenario.unknown_person_id]
+    )
+    return int(hashlib.sha256(names.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def query_phases(
+    known_query_counts: Sequence[int],
+    unknown_count: int,
+    post_count: int,
+    seed: int,
+) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    """Which canonical query slot is asked before the enrolment, and which after.
+
+    One deal, used by both lanes. The local driver maps the slots back to
+    photographs; the hosted controller keeps them as its private map from a
+    shuffled batch to a scored answer. Before this they dealt differently, and
+    the same submission could score two numbers depending on where it ran.
+
+    Half of each person's own held-out photos go before the enrolment and half
+    after, the odd one after. Recognition is not only naming somebody you were
+    told about, it is still naming them after you have been told about somebody
+    else, and a submission that emptied its database whenever it learned a new
+    person answered every question a lifecycle asks when all the known
+    questions come first. Splitting each person's own photos rather than
+    pooling everybody's is what makes that measurable for every person instead
+    of a randomly chosen subset.
+
+    Then both phases are shuffled. Without it each is the known people in
+    enrolment order followed by the stranger's photos, and a submission that
+    keeps the names it was given and answers by position scores full marks
+    without looking at a photograph: measured at 1.0 before the shuffle and
+    0.125 after.
+
+    What the shuffle is worth depends on whether the caller's ``seed`` can be
+    recomputed by the submission, and that is the caller's question rather than
+    this one's. See ``local_query_seed`` for what the local lane can promise.
+    """
+
     import random
 
-    before: List[Any] = []
-    after: List[Any] = []
-    for which, identity in enumerate(scenario.known):
-        queries = list(identity.queries)
-        split = len(queries) // 2
-        for at, photo in enumerate(queries):
-            slot = ("known", which, at)
-            (before if at < split else after).append((slot, photo))
-    before.extend((("unknown", at), photo) for at, photo in enumerate(scenario.unknown_queries))
-    after.extend((("post", at), photo) for at, photo in enumerate(scenario.post_enrollment_queries))
+    known_count = sum(known_query_counts)
+    before: List[int] = []
+    after: List[int] = []
+    at = 0
+    for count in known_query_counts:
+        split = count // 2
+        before.extend(range(at, at + split))
+        after.extend(range(at + split, at + count))
+        at += count
+    before.extend(range(known_count, known_count + unknown_count))
+    after.extend(
+        range(known_count + unknown_count, known_count + unknown_count + post_count)
+    )
 
-    names = "|".join([identity.person_id for identity in scenario.known] +
-                     [scenario.unknown_person_id])
-    seed = int(hashlib.sha256(names.encode("utf-8")).hexdigest()[:16], 16)
     shuffle = random.Random(seed)
     shuffle.shuffle(before)
     shuffle.shuffle(after)
-    return before, after
+    return tuple(before), tuple(after)
 
 
 def _run_shuffled_queries(
