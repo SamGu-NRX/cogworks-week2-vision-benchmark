@@ -50,9 +50,12 @@ class ShuffledQueryBatches:
 class RecognitionScenario:
     """One complete known-to-unknown recognition lifecycle.
 
-    The same fresh adapter is retained across initial enrollment, known
-    queries, unknown rejection, enrollment of that unknown identity, and
-    held-out re-identification.
+    The same fresh adapter is retained across initial enrollment, questions
+    about the people it was told about, unknown rejection, enrollment of that
+    unknown identity, held-out re-identification, and further questions about
+    the people it already knew. Those last ones are the point of retaining one
+    adapter: a submission that forgets everybody when it learns somebody new
+    is a submission that has not done the task.
 
     ``shuffled_queries`` is absent for a locally built scenario, which is the
     case a student runs against the public manifests and the case
@@ -114,6 +117,10 @@ def run_recognition_scenario(
     -------
     dict
         Labels for known, pre-enrollment unknown, and post-enrollment queries.
+
+    Two ``recognize`` calls with the enrolment between them, and each carries
+    questions about the people already enrolled. See ``_dealt_known_queries``
+    for why, and ``ShuffledQueryBatches`` for the hosted lane this matches.
     """
 
     adapter = adapt_recognition(instantiate(factory, model))
@@ -126,27 +133,67 @@ def run_recognition_scenario(
     if batches is not None:
         return _run_shuffled_queries(adapter, scenario, batches)
 
-    known_images: List[Image] = []
-    for identity in scenario.known:
-        known_images.extend(identity.queries)
-    known = _recognition_labels(adapter.recognize(known_images), len(known_images), "known")
+    before_images, before_spans, after_images, after_spans = _dealt_known_queries(scenario)
 
-    unknown_before = _recognition_labels(
-        adapter.recognize(scenario.unknown_queries),
-        len(scenario.unknown_queries),
-        "unknown-before-enrollment",
+    first = list(before_images) + list(scenario.unknown_queries)
+    asked_before = _recognition_labels(
+        adapter.recognize(first), len(first), "before-enrollment"
     )
     adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
-    post_enrollment = _recognition_labels(
-        adapter.recognize(scenario.post_enrollment_queries),
-        len(scenario.post_enrollment_queries),
-        "post-enrollment",
+    second = list(after_images) + list(scenario.post_enrollment_queries)
+    asked_after = _recognition_labels(
+        adapter.recognize(second), len(second), "after-enrollment"
     )
+
+    known: List[Optional[PersonId]] = []
+    for (at_before, count_before), (at_after, count_after) in zip(before_spans, after_spans):
+        known.extend(asked_before[at_before : at_before + count_before])
+        known.extend(asked_after[at_after : at_after + count_after])
     return {
         "known": known,
-        "unknown_before": unknown_before,
-        "post_enrollment": post_enrollment,
+        "unknown_before": asked_before[len(before_images) :],
+        "post_enrollment": asked_after[len(after_images) :],
     }
+
+
+def _dealt_known_queries(scenario: RecognitionScenario):
+    """Each known identity's held-out photos, dealt into both asking phases.
+
+    Recognition is not only naming somebody you were told about, it is still
+    naming them after you have been told about somebody else. A submission
+    that emptied its database every time it learned a new person answered
+    every question this benchmark asked, because every question about the
+    people it already knew came before the stranger was enrolled.
+
+    So half of each person's held-out photos are asked before and half after,
+    the way the hosted lane already deals them
+    (``cogworks_runner.week2_payload._query_plan``), and for the same reason
+    it gives: a batch holding only the stranger's photos is answerable with
+    one constant label and without looking at any pixels.
+
+    The odd photo goes to the second phase, as it does there. A person with
+    one held-out photo is therefore asked about only after the enrolment,
+    which is the half that is harder to fake.
+
+    Returns the photos for each phase and, for each identity, where that
+    person's answers sit inside each phase, so the caller can put ``known``
+    back into the order ``recognition_expected`` builds its gold in. That
+    order is unchanged, and so is the gold: only where the question is asked
+    has moved.
+    """
+
+    before_images: List[Image] = []
+    after_images: List[Image] = []
+    before_spans = []
+    after_spans = []
+    for identity in scenario.known:
+        queries = list(identity.queries)
+        split = len(queries) // 2
+        before_spans.append((len(before_images), split))
+        before_images.extend(queries[:split])
+        after_spans.append((len(after_images), len(queries) - split))
+        after_images.extend(queries[split:])
+    return before_images, before_spans, after_images, after_spans
 
 
 def _run_shuffled_queries(

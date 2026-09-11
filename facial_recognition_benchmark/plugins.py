@@ -28,7 +28,12 @@ class RecognitionBenchmark:
     contract_version = "cogworks.submissions.v2"
     plugin_version = "0.1.0"
     dataset_version = "celeba-manifests-v1"
-    scorer_version = "recognition-v1"
+    #: Moved from "recognition-v1" when the lifecycle began asking about the
+    #: people already enrolled *after* the stranger was enrolled as well as
+    #: before. The metrics and their arithmetic are unchanged, but the same
+    #: submission can now score differently, so a run page comparing a v1
+    #: number against a v2 one is comparing two different questions.
+    scorer_version = "recognition-v2"
     primary_metric = "recognition_score"
 
     metric_labels = {
