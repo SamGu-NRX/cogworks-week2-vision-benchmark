@@ -174,10 +174,11 @@ def _dealt_queries(scenario: RecognitionScenario):
     the people it already knew came before the stranger was enrolled.
 
     So half of each person's held-out photos are asked before the enrolment
-    and half after. The hosted lane already deals its two batches that way
-    (``cogworks_runner.week2_payload._query_plan``) and gives the reason: a
-    batch holding only the stranger's photos is answerable with one constant
-    label and without looking at any pixels.
+    and half after. The hosted lane splits its two batches for the reason it
+    states (``cogworks_runner.week2_payload._query_plan``): a batch holding
+    only the stranger's photos is answerable with one constant label and
+    without looking at any pixels. It is the same lifecycle; it is not the same
+    deal, and the difference is below.
 
     Then both batches are shuffled, and that is not decoration either. Without
     it each batch is the known people in enrolment order followed by the
@@ -186,18 +187,30 @@ def _dealt_queries(scenario: RecognitionScenario):
     Measured: exactly that submission scored 1.0 before this shuffle.
 
     The permutation is a digest of the scenario's own names, so two runs of one
-    case ask in the same order. That is a weaker guarantee than the hosted
-    lane's, whose seed is deliberately one the sandbox cannot recompute; here
-    a student can read this function and work the order out. Locally that buys
-    them nothing, because the case is theirs to read anyway, and the hosted
-    run they publish against still hides it.
+    case ask in the same order, which a submission scored twice needs.
 
-    Two places this does not match the hosted deal, stated rather than
-    papered over. It splits each person's photos rather than shuffling all the
-    known slots and splitting the total, so every person with two or more
-    held-out photos is asked about on both sides instead of a random subset
-    being. And a person with a single held-out photo is asked about only
-    after the enrolment, where the hosted split can put theirs either side.
+    What that does and does not achieve, measured. It defeats a submission that
+    answers by position: one that keeps the names it was handed and returns
+    them in order scored 1.0 before this and 0.125 after. It does not make a
+    local score mean recognition. The names and the counts are in the public
+    manifest and this function is readable, so a submission can recompute the
+    seed, replay the permutation and score 1.0 without opening a photograph;
+    that was reproduced on both public tiers.
+
+    Nothing here can close that, and no amount of cleverness would: the
+    submission runs in this process, so anything this knows it can read. The
+    hosted lane is where the seed is genuinely hidden, which is why the local
+    command prints LOCAL and SELF-REPORTED and the hosted run is the one a
+    team publishes against.
+
+    Where this and the hosted deal differ, stated rather than papered over.
+    Hosted shuffles all the known slots together and splits the total, so a
+    person can land wholly on one side; this splits each person's own photos,
+    so everybody with two or more is asked about on both sides. That is
+    deliberate, because after-enrolment coverage for every person is the
+    property this exists for, but it is a different distribution and not only
+    a different order. With a single held-out photo the two diverge further:
+    this asks only after the enrolment, hosted can put it either side.
     """
 
     import hashlib

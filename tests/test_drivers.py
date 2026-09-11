@@ -231,8 +231,16 @@ class AnswersByPositionWithoutLookingAtAPhoto:
         ]
 
 
-def test_answering_by_position_does_not_score():
-    """The batches are shuffled, so position says nothing about who is in a photo."""
+def test_answering_by_position_no_longer_scores_perfectly():
+    """Shuffling the batches costs a submission that answers by position.
+
+    It does not make a local score mean recognition. The names and counts are
+    in the public manifest and `_dealt_queries` is readable, so a submission
+    that recomputes the seed and replays the permutation still scores 1.0
+    without opening a photograph. Nothing local can close that, because the
+    submission runs in this process; the hosted lane is where the seed is
+    hidden.
+    """
 
     scenario = retention_scenario()
 
@@ -241,7 +249,8 @@ def test_answering_by_position_does_not_score():
     )
     scores = score_recognition([output], [recognition_expected(scenario)])
 
-    assert scores["recognition_score"] != 1.0
+    # 1.0 against the driver that split without shuffling.
+    assert scores["recognition_score"] == 0.125
 
 
 def test_the_same_case_is_asked_in_the_same_order_twice():

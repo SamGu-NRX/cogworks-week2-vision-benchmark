@@ -1099,7 +1099,13 @@ def describes_no_face(answer: Any) -> bool:
     if answer is None:
         return True
     if isinstance(answer, np.ndarray):
-        return answer.size == 0
+        # No rows, rather than no numbers. A `(2, 0)` array is two faces whose
+        # descriptors came back empty, which is a describe step that broke
+        # halfway rather than a detector that found nobody, and reading it as
+        # the second would hide the first.
+        if answer.ndim == 1:
+            return answer.size == 0
+        return answer.ndim == 2 and answer.shape[0] == 0
     if isinstance(answer, (list, tuple)):
         return all(describes_no_face(part) for part in answer)
     return False

@@ -1196,3 +1196,40 @@ class ARepositoryThatFindsNoFaceIsRefusedAtTheStepThatFailed(_ARecognitionSearch
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnAnswerIsJudgedBeforeTheNextPhotoRuns(_ARecognitionSearch):
+    """A describe step may hand back the same object every call.
+
+    Judging a whole batch afterwards read each answer as whatever it had
+    become, so one malformed answer followed by a legitimate empty one was
+    scored as two rejections.
+    """
+
+    def test_a_malformed_answer_is_not_rescued_by_the_next_photo(self):
+        from facial_recognition_benchmark.adapters import AdapterContractError
+        from facial_recognition_benchmark.discovered import DiscoveredRecognition
+
+        buffer = [0.0]
+
+        class Reused:
+            form = None
+
+            def __init__(self):
+                self.calls = 0
+                self.call = self._call
+                self.bound = self._call
+
+            def _call(self, *args):
+                self.calls += 1
+                if self.calls > 1:
+                    buffer[:] = []
+                return buffer
+
+        found = self.resolve(NORMAL)
+        ready = found.fresh()
+        adapter = DiscoveredRecognition(ready.chain, ready.enroll, ready.query)
+        adapter._chain = [Reused()]
+
+        with self.assertRaises(AdapterContractError):
+            adapter.recognize([photo(1), photo(1)])

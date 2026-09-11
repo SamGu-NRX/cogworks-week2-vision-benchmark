@@ -229,27 +229,28 @@ class DiscoveredRecognition:
         with _somewhere_throwaway():
             for photo in photos:
                 answer = _run(self._chain, [photo])
-                # Read out before the next photo runs. A describe step that
-                # writes into one array every call hands back the same buffer
-                # each time, and `descriptors_in` is where the copy is made.
+                # Read and judged before the next photo runs, both for the same
+                # reason: a describe step that hands back the same object every
+                # call has already changed it by then. `descriptors_in` copies
+                # the rows out, and waiting to ask whether an answer with no
+                # rows meant "no face" let a later call turn an earlier
+                # malformed answer into a legitimate one.
                 rows = descriptors_in(answer)
-                described.append((answer, rows))
-        checked = []
-        for answer, rows in described:
-            if not rows and not describes_no_face(answer):
-                # Their detector saying "nobody here" is an answer and is
-                # scored as unknown. This is not that: it is a shape that says
-                # nothing about faces, and scoring it as a rejection would give
-                # a broken describe step the credit for a correct one.
-                raise AdapterContractError(
-                    f"Your step that describes a photo answered {shortly(answer)}, "
-                    "which holds no face descriptors and is not a way of saying "
-                    "there were none. Return the descriptors, or an empty array, "
-                    "or None."
-                )
-            checked.append(rows)
-        self.faces_not_asked_about += sum(len(rows) - 1 for rows in checked if rows)
-        return checked
+                if not rows and not describes_no_face(answer):
+                    # Their detector saying "nobody here" is an answer and is
+                    # scored as unknown. This is not that: it is a shape that
+                    # says nothing about faces, and scoring it as a rejection
+                    # would give a broken describe step the credit for a
+                    # correct one.
+                    raise AdapterContractError(
+                        f"Your step that describes a photo answered "
+                        f"{shortly(answer)}, which holds no face descriptors and "
+                        "is not a way of saying there were none. Return the "
+                        "descriptors, or an empty array, or None."
+                    )
+                described.append(rows)
+        self.faces_not_asked_about += sum(len(rows) - 1 for rows in described if rows)
+        return described
 
 
 @contextlib.contextmanager
