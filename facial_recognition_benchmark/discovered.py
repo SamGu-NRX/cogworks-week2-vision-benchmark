@@ -108,6 +108,23 @@ class DiscoveredRecognition:
     from, once a photo yields no face or two.
     """
 
+    #: One photo, one face: the first their describe step returned, on both
+    #: sides. A contract that asks for one label per photo has to reduce their
+    #: per-face answer to a per-photo one somewhere, and every way of doing it
+    #: leans, so this picks the way that leans least and says which way.
+    #:
+    #: The alternative was to enrol every face and then answer with the first
+    #: one their matcher recognized, and it leans twice in the same direction:
+    #: a spurious box filed under a person is what a later stranger matches,
+    #: and reading past a face their matcher rejected can only turn a correct
+    #: rejection into a name, never the reverse.
+    #:
+    #: For a team who picks a face themselves this is their pick, because it
+    #: happened inside their own describe step; for one who returns them all
+    #: it is their detector's order. Extra faces are counted and never asked
+    #: about. This is part of the contract, so changing it is a new benchmark
+    #: version rather than an edit.
+
     def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any) -> None:
         self._chain = list(chain)
         self._enroll = enroll_call
@@ -117,60 +134,52 @@ class DiscoveredRecognition:
         # what it asked them to remember, and it is what lets an answer be
         # read back as an identification or as none.
         self._known: set = set()
+        # What happened to a photo before their matcher saw it, and what came
+        # back that this could not read. Counted rather than dropped: all
+        # three end as None, a run of them scores exactly what a submission
+        # that answers None to everything scores, and the metric's own
+        # diagnostics read that as a cutoff being strict. `score` says so.
+        self.photos_without_a_face = 0
+        self.faces_not_asked_about = 0
+        self.answers_not_read = 0
 
     def enroll(self, person_id: str, images: Sequence[Any]) -> None:
-        """File every face in these photos under one name.
-
-        Every face rather than a chosen one. The benchmark's photos are
-        single-face crops, so every descriptor one of them yields belongs to
-        the person it is of. Choosing between them would be the benchmark
-        inventing a face-selection rule the team did not write; a team who has
-        one has already applied it inside their own describe step, and this
-        stores whatever that returned.
-
-        A photo their step finds no face in enrolls nothing, which is their
-        detector's answer about that photo rather than an error.
-        """
+        """File the first face in each of these photos under one name."""
 
         self._known.add(person_id)
         for rows in self._describe(images):
-            for row in rows:
-                self._enroll(person_id, row)
+            if rows:
+                self._enroll(person_id, rows[0])
 
     def recognize(self, images: Sequence[Any]) -> List[Optional[str]]:
-        """One answer per photo: the first face their query put a name to.
+        """One answer per photo: what their query said about its first face.
 
-        Their cutoff and their rejection are the only things deciding. This
-        picks no face and applies no threshold, and when their query named
-        nobody the answer is None, which is this contract's word for "I do not
-        know this person" and the honest thing to say about a photo their
-        system could not put a name to.
-
-        A photo holding two people they both know therefore gets one of them,
-        and which one is the order their describe step returned. The contract
-        asks for one label per image and these are single-face crops, so that
-        is a shape the benchmark's own data does not produce.
+        Their cutoff and their rejection are the only things deciding. Nothing
+        here applies a threshold, and when their query named nobody the answer
+        is None, which is this contract's word for "I do not know this person"
+        and the honest thing to say about a photo their system could not put a
+        name to.
         """
 
-        return [self._who(rows) for rows in self._describe(images)]
+        from .roles import named, readable
 
-    def _who(self, rows: Sequence[Any]) -> Optional[str]:
-        """The first face in one photo their query put a name to."""
-
-        # Imported here rather than at module scope, like everything else this
-        # file takes from `.roles`: that module needs cogbench, and this
-        # package is importable, and its other suites run, without it.
-        from .roles import named
-
-        for row in rows:
-            who = named(self._query(row), self._known)
-            if who is not None:
-                return who
-        return None
+        answers: List[Optional[str]] = []
+        for rows in self._describe(images):
+            if not rows:
+                answers.append(None)
+                continue
+            answer = self._query(rows[0])
+            if not readable(answer):
+                self.answers_not_read += 1
+            answers.append(named(answer, self._known))
+        return answers
 
     def _describe(self, images: Sequence[Any]) -> List[List[Any]]:
         """Their describe step over these photos, in the form it was bound with."""
 
+        # Imported here rather than at module scope, like everything else
+        # this file takes from `.roles`: that module needs cogbench, and this
+        # package is importable, and its other suites run, without it.
         from .roles import _run, descriptors_in, write_photos
 
         photos = list(images)
@@ -183,7 +192,10 @@ class DiscoveredRecognition:
         if getattr(self._chain[0], "form", None) == 1:
             photos = write_photos(photos)
         with _somewhere_throwaway():
-            return [descriptors_in(_run(self._chain, [photo])) for photo in photos]
+            described = [descriptors_in(_run(self._chain, [photo])) for photo in photos]
+        self.photos_without_a_face += sum(1 for rows in described if not rows)
+        self.faces_not_asked_about += sum(len(rows) - 1 for rows in described if rows)
+        return described
 
 
 @contextlib.contextmanager
@@ -232,9 +244,10 @@ def build_recognition(submission: Any) -> DiscoveredRecognition:
     them binds and starts the run holding the two people the search enrolled.
     `roles.named` keeps those two out of an answer, because it hands back only
     names the run itself enrolled, but it cannot keep them from competing.
-    None of the audited repositories has that shape and reaches a run. The
-    isolation the SDK would need is a note in the phase report, not something
-    this can supply.
+    None of the audited repositories has that shape and reaches a run. Giving
+    them an empty database would mean restoring a module's globals between
+    attempts, which belongs to whatever is calling their functions rather than
+    to the week describing the task.
     """
 
     if not getattr(submission, "ready", False):

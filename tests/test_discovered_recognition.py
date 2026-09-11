@@ -31,6 +31,7 @@ from facial_recognition_benchmark.roles import (  # noqa: E402
     looks_like_an_empty_database,
     looks_like_face_descriptors,
     named,
+    readable,
     recognition_fixture,
 )
 
@@ -378,8 +379,14 @@ class EveryQueryPhotoGetsExactlyOneAnswer(_ARecognitionSearch):
     def test_a_photo_with_no_face_in_it_is_one_answer_of_none(self):
         self.assertEqual(self.adapter.recognize([photo()]), [None])
 
-    def test_a_photo_with_two_faces_is_still_one_answer(self):
+    def test_a_photo_with_two_faces_is_answered_on_the_first_of_them(self):
         self.assertEqual(self.adapter.recognize([photo(4, 1)]), ["bea"])
+
+    def test_it_does_not_read_past_a_face_their_matcher_rejected(self):
+        # The rule is the first face, not the first face they recognized.
+        # Reading on would turn a correct rejection into a name and could
+        # never do the reverse, which is a lean toward naming.
+        self.assertEqual(self.adapter.recognize([photo(20, 1)]), [None])
 
     def test_a_photo_of_two_strangers_is_one_answer_of_none(self):
         self.assertEqual(self.adapter.recognize([photo(20, 21)]), [None])
@@ -393,6 +400,50 @@ class EveryQueryPhotoGetsExactlyOneAnswer(_ARecognitionSearch):
         self.adapter.enroll("nobody", [photo()])
 
         self.assertEqual(self.adapter.recognize([photo(1)]), ["ada"])
+
+    def test_only_the_first_face_in_a_photo_is_enrolled(self):
+        self.adapter.enroll("cass", [photo(30, 31)])
+
+        self.assertEqual(self.adapter.recognize([photo(30), photo(31)]), ["cass", None])
+
+
+class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
+    """All of it scores as "I do not know this person", so a metric cannot show it.
+
+    A submission whose detector finds nothing scores exactly what one that
+    answers None to everything scores, and `recognition_diagnostics` then
+    tells the team their cutoff is strict, which is the one thing that is not
+    their problem.
+    """
+
+    def notes_after(self, images):
+        from facial_recognition_benchmark.plugins import RecognitionBenchmark
+
+        plugin = RecognitionBenchmark()
+        found = self.resolve(NORMAL)
+        adapter = plugin.submission_from_discovery(found)
+        adapter.enroll("ada", [photo(1)])
+        adapter.recognize(images)
+        plugin.score(
+            [run_recognition_scenario(lambda *a, **k: adapter, FakeFaceNet(), FIRST)],
+            [FIRST],
+        )
+        return plugin.last_diagnostics
+
+    def test_photos_their_step_found_no_face_in_are_counted_and_said(self):
+        notes = self.notes_after([photo(), photo(), photo(1)])
+
+        self.assertTrue(any("found no face in" in note for note in notes), notes)
+
+    def test_faces_it_never_asked_about_are_counted_and_said(self):
+        notes = self.notes_after([photo(1, 2, 3)])
+
+        self.assertTrue(any("extra faces" in note for note in notes), notes)
+
+    def test_a_clean_run_says_none_of_it(self):
+        notes = self.notes_after([photo(1)])
+
+        self.assertFalse([note for note in notes if "found no face" in note], notes)
 
 
 #: A query that ranks the nearest rows and never rejects, beside one that puts
@@ -759,6 +810,27 @@ class AnAnswerIsReadAgainstTheNamesTheBenchmarkEnrolled(unittest.TestCase):
         self.assertIsNone(named(None, self.KNOWN))
         self.assertIsNone(named(0.4, self.KNOWN))
         self.assertIsNone(named([], self.KNOWN))
+
+    def test_a_name_with_space_around_it_is_the_name(self):
+        self.assertEqual(named(" ada ", self.KNOWN), "ada")
+        self.assertEqual(named((" ada ", 0.2), self.KNOWN), "ada")
+
+    def test_an_answer_stating_two_names_is_not_read_either_way_round(self):
+        # Guessing between them makes the reading depend on which the team
+        # wrote first, and the same answer would then come back two ways.
+        both = {"prediction": "unknown", "nearest_name": "ada"}
+
+        self.assertIsNone(named(both, self.KNOWN))
+        self.assertIsNone(named(dict(reversed(list(both.items()))), self.KNOWN))
+        self.assertFalse(readable(both))
+
+    def test_saying_nobody_is_readable_and_saying_nothing_is_not(self):
+        # Both score as unknown. Only the second is worth telling them about.
+        self.assertTrue(readable("Unknown"))
+        self.assertTrue(readable(None))
+        self.assertTrue(readable({"prediction": None}))
+        self.assertFalse(readable(0.4))
+        self.assertFalse(readable([]))
 
 
 #: A describe step that hands back the same buffer every time, which is a

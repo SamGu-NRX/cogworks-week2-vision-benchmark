@@ -54,6 +54,7 @@ __all__ = [
     "looks_like_an_empty_database",
     "looks_like_face_descriptors",
     "named",
+    "readable",
     "recognition_accepts",
     "recognition_fixture",
 ]
@@ -676,11 +677,17 @@ def _grouping(labels: Sequence[Any]) -> frozenset:
 # The resolver pairs the last two itself, the way it finds Week 1's song
 # database; what is described here is the first.
 #
-# The descriptor step is the half both sides share, and requiring one chain
-# for both is what proves a team's two sides agree about what a descriptor is.
-# A team whose enrolment describes a face one way and whose query describes it
-# another has a real bug, and running the same chain for both is how that bug
-# stays visible instead of reading as a badly chosen cutoff.
+# The descriptor step is the half both sides share, and running one chain for
+# both removes one cause of a miss: their two halves cannot disagree about
+# what a descriptor is, because both were handed the same vectors. What that
+# leaves is separable, which is the point. Their detector is counted and
+# reported (`plugins._describing_notes`), so a miss belongs to their matcher
+# or their cutoff and the run says which.
+#
+# The cost, written down because the opposite is easy to claim: this does not
+# reveal a team whose enrolment describes a face one way and whose query
+# describes it another. It makes that unexecutable. Such a team scores clean
+# here and drifts in their own application, and the benchmark will not say so.
 
 
 #: A value narrower than this is one of the things the model returns beside
@@ -701,9 +708,9 @@ NARROWEST_DESCRIPTOR = 16
 def looks_like_face_descriptors(value: Any) -> bool:
     """One face descriptor, or one per face in a photo.
 
-    Clustering reads the same shapes with `looks_like_descriptors` and no
-    width rule, and the difference is not the corpus, which is the same teams.
-    It is how much each acceptance test can catch. Clustering grades a whole
+    Clustering asks a looser question with `looks_like_descriptors`, and the
+    difference is not the corpus, which is the same teams. It is how much each
+    acceptance test can catch. Clustering grades a whole
     six-photo grouping, so a chain bound on the boxes answers wrongly and is
     refused. Recognition grades one name and one rejection against two people,
     which boxes can pass by luck, and passing stops the search.
@@ -830,8 +837,9 @@ def recognition_accepts(chain, photos, fixture, enroll_call, query_call):
     on. The one tuning failure this cannot forgive is the opposite: a cutoff
     strict enough to reject somebody it has just been shown two photos of
     fails the first question, and a store that never stored anything fails it
-    the same way, so there is no telling those apart from here. Two enrolment
-    photos rather than one is what keeps that from being a common outcome.
+    the same way, so there is no telling those apart from here. The fixture
+    gives each person two enrolment photos rather than one so that a cutoff
+    has a profile worth matching against, which is the only lever this has.
     """
 
     with _fresh_state():
@@ -877,10 +885,9 @@ def _attempt(described, fixture, enroll_call, query_call):
         # face in any of the enrolment photos, and saying so here is the
         # difference between naming the step that failed and telling a team
         # their query answered "no one".
-        return False, (
-            f"found no face in any of the {len(fixture.photos) - 2} photos of "
-            f"{' and '.join(name for name, _ in fixture.enrollment)}"
-        )
+        offered = sum(len(positions) for _, positions in fixture.enrollment)
+        who = " and ".join(name for name, _ in fixture.enrollment)
+        return False, f"found no face in any of the {offered} photos of {who}"
     if query_call is None:
         who = " and ".join(name for name, _ in fixture.enrollment)
         return True, f"enrolled {who} from {enrolled} descriptors"
@@ -1034,40 +1041,63 @@ def named(answer: Any, known: Any) -> Optional[str]:
     """
 
     said = _stated_name(answer)
-    return said if said is not None and said.strip() in known else None
+    if not isinstance(said, str):
+        return None
+    said = said.strip()
+    return said if said in known else None
 
 
-def _stated_name(answer: Any) -> Optional[str]:
-    """The name their answer states, not one found somewhere inside it.
+def readable(answer: Any) -> bool:
+    """Whether their answer says anything this can read as a name or as none.
 
-    A name is either the answer, or one of the answer's own parts: `"ada"`,
-    `("ada", 0.2)`, `{"prediction": "ada", ...}`. It is never something reached
-    by going down through a collection, and that is the whole rule.
-
-    Reading deeper looks harmless and is not. Bagel's `predict` returns their
-    decision under `prediction` and the ranking it came from under `results`,
-    so a reader that descends into `results` finds the top-ranked name and
-    turns their correct rejection into an identification. It did: at a depth of
-    four this read `{"results": [...], "prediction": "unknown"}` as `"ada"`,
-    and the same dictionary written the other way round as a rejection, so the
-    answer depended on the order the team happened to build their dictionary
-    in. One level reads every shape in the corpus and cannot do that.
-
-    A team whose only query answers with a ranking and no decision is not read
-    here. `DiscoverySpec.readers` is what the SDK provides for running one of
-    their own functions over an answer, and none of the audited repositories
-    needs it.
+    False is not a rejection. It is an answer shaped like nothing the contract
+    has a word for: a bare number, an empty list, a mapping that states two
+    names. It is scored as though they had said "I do not know this person",
+    because ending a scenario over one is worse than scoring it, and it is
+    counted so that it is not laundered into a rejection in silence.
     """
 
-    if isinstance(answer, str):
+    return _stated_name(answer) is not _UNREADABLE
+
+
+#: Their answer said nothing this can read, which is not the same as their
+#: saying they do not know the person.
+_UNREADABLE = object()
+
+
+def _stated_name(answer: Any) -> Any:
+    """The name their answer states, None when it states nobody, else unreadable.
+
+    Two rules, and between them they read every shape in the corpus without
+    depending on how a team happened to build it.
+
+    A name is the answer itself, or one of the answer's own parts. It is never
+    something reached by going down through a collection. Bagel's `predict`
+    returns their decision under `prediction` and the ranking it came from
+    under `results`, so a reader that descends into `results` finds the
+    top-ranked name and turns their correct rejection into an identification.
+
+    And the answer's parts must say one thing. A `("ada", 0.2)` pair and a
+    `{"prediction": "unknown", "similarity": 0.4, "results": [...]}` mapping
+    each state exactly one name-shaped part, so each is read. Something that
+    states two, like a mapping holding both a decision and the nearest name
+    beside it, is not an answer this can read, and guessing between them means
+    the reading depends on which the team wrote first. None of the audited
+    repositories answers that way; a team who does is refused at the
+    acceptance test rather than scored on a coin toss.
+
+    A team whose only query answers with a ranking and no decision is likewise
+    not read. `DiscoverySpec.readers` is what the SDK provides for running one
+    of their own functions over an answer, and none of the five needs it.
+    """
+
+    if isinstance(answer, str) or answer is None:
         return answer
+    if not isinstance(answer, (dict, list, tuple)):
+        return _UNREADABLE
     parts = answer.values() if isinstance(answer, dict) else answer
-    if isinstance(parts, (str, bytes)) or not isinstance(answer, (dict, list, tuple)):
-        return None
-    for part in parts:
-        if isinstance(part, str):
-            return part
-    return None
+    said = [part for part in parts if part is None or isinstance(part, str)]
+    return said[0] if len(said) == 1 else _UNREADABLE
 
 
 #: The last chain's descriptors, so a pairing search does not describe the
@@ -1089,15 +1119,16 @@ def _described(chain: Sequence[Any], photos: Sequence[Any]) -> List[List[Any]]:
     """
 
     key = tuple(chain)
-    if _DESCRIBED and _DESCRIBED[0] == key and _same_photos(photos):
+    if _DESCRIBED and _DESCRIBED[0] == key and _same_photos(_DESCRIBED[1], photos):
         return _DESCRIBED[2]
     described = [descriptors_in(_run(chain, [photo])) for photo in photos]
     _DESCRIBED[:] = [key, list(photos), described]
     return described
 
 
-def _same_photos(photos: Sequence[Any]) -> bool:
-    cached = _DESCRIBED[1]
+def _same_photos(cached: Sequence[Any], photos: Sequence[Any]) -> bool:
+    """The same photo objects, not merely as many of them."""
+
     if len(cached) != len(photos):
         return False
     return all(one is other for one, other in zip(cached, photos))

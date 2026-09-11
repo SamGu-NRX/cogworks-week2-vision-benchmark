@@ -81,6 +81,13 @@ class RecognitionBenchmark:
         ),
     }
 
+    def __init__(self) -> None:
+        #: Discovered adapters built during the current `run`, in scenario
+        #: order, emptied at the start of each one. Stays empty for a
+        #: submission that declares itself, which describes its own photos and
+        #: is never asked what it found.
+        self._discovered: List[Any] = []
+
     def load_cases(self, tier: str, cache_root: Optional[Path] = None) -> Sequence[Any]:
         """Load the small test or larger public-evaluation cases."""
 
@@ -91,6 +98,7 @@ class RecognitionBenchmark:
     ) -> List[Mapping[str, Sequence[Optional[str]]]]:
         """Execute every case through a fresh application adapter."""
 
+        self._discovered = []
         return [run_recognition_scenario(factory, model, case) for case in cases]
 
     def score(
@@ -107,7 +115,9 @@ class RecognitionBenchmark:
         """
 
         scores = dict(score_recognition(outputs, [recognition_expected(case) for case in cases]))
-        self.last_diagnostics = list(scores.pop("_diagnostics", []))
+        self.last_diagnostics = list(scores.pop("_diagnostics", [])) + _describing_notes(
+            self._discovered
+        )
         return scores
 
     def cache_status(self, tier: str, cache_root: Optional[Path] = None) -> CacheStatus:
@@ -177,11 +187,20 @@ class RecognitionBenchmark:
         )
 
     def submission_from_discovery(self, submission: Any) -> Any:
-        """Turn a resolved repository into the object ``run`` expects."""
+        """Turn a resolved repository into the object ``run`` expects.
+
+        The adapters are kept so ``score`` can say what their describe step
+        found. A run whose detector finds nothing scores what a submission
+        that answers None to everything scores, and the metric's diagnostics
+        read that as a cutoff being too strict, which sends a team to the one
+        number that is not their problem.
+        """
 
         from .discovered import build_recognition
 
-        return build_recognition(submission)
+        adapter = build_recognition(submission)
+        self._discovered.append(adapter)
+        return adapter
 
 
 class ClusteringBenchmark:
@@ -375,6 +394,50 @@ class ClusteringBenchmark:
         from .discovered import build
 
         return build(submission)
+
+
+def _describing_notes(adapters: Sequence[Any]) -> List[str]:
+    """What their describe step and their query did that a metric cannot show.
+
+    All three of these end as None, which the scorer counts as saying "I do
+    not know this person". A run full of them scores what a submission that
+    answers None to everything scores, and the metric's diagnostics then send
+    the team to their cutoff, which is the one thing that is not the problem.
+    """
+
+    def total(name: str) -> int:
+        return sum(int(getattr(adapter, name, 0)) for adapter in adapters)
+
+    def count(number: int, thing: str) -> str:
+        return f"{number} {thing}" if number == 1 else f"{number} {thing}s"
+
+    notes = []
+    missing = total("photos_without_a_face")
+    if missing:
+        notes.append(
+            f"Your step that describes a photo found no face in {missing} of "
+            "them, and those were answered as unknown before your matcher saw "
+            "them. Check the detection probability you keep faces above."
+        )
+    extra = total("faces_not_asked_about")
+    if extra:
+        notes.append(
+            f"{count(extra, 'extra face')} turned up in photos of one person "
+            "each. This benchmark asks about the first face your step returns "
+            "and counts "
+            "the rest, so a second detection costs nothing here, but it is "
+            "worth knowing your detector found one."
+        )
+    unread = total("answers_not_read")
+    if unread:
+        notes.append(
+            f"{count(unread, 'answer')} from your matching function said "
+            "nothing this could read as a name or as nobody, and was scored as "
+            "unknown. A "
+            "name, or None, or a tuple or dictionary holding exactly one of "
+            "those, is what it reads."
+        )
+    return notes
 
 
 def _facenet() -> Any:
