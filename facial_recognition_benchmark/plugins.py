@@ -81,6 +81,13 @@ class RecognitionBenchmark:
         ),
     }
 
+    def __init__(self) -> None:
+        #: Discovered adapters built during the current `run`, in scenario
+        #: order, emptied at the start of each one. Stays empty for a
+        #: submission that declares itself, which describes its own photos and
+        #: is never asked what it found.
+        self._discovered: List[Any] = []
+
     def load_cases(self, tier: str, cache_root: Optional[Path] = None) -> Sequence[Any]:
         """Load the small test or larger public-evaluation cases."""
 
@@ -91,6 +98,7 @@ class RecognitionBenchmark:
     ) -> List[Mapping[str, Sequence[Optional[str]]]]:
         """Execute every case through a fresh application adapter."""
 
+        self._discovered = []
         return [run_recognition_scenario(factory, model, case) for case in cases]
 
     def score(
@@ -107,13 +115,92 @@ class RecognitionBenchmark:
         """
 
         scores = dict(score_recognition(outputs, [recognition_expected(case) for case in cases]))
-        self.last_diagnostics = list(scores.pop("_diagnostics", []))
+        self.last_diagnostics = list(scores.pop("_diagnostics", [])) + _describing_notes(
+            self._discovered
+        )
         return scores
 
     def cache_status(self, tier: str, cache_root: Optional[Path] = None) -> CacheStatus:
         """Report whether the selected public data tier is cached and valid."""
 
         return cache_status(_public_manifest(tier), cache_root)
+
+    def discovery(self) -> Any:
+        """What to look for in a repository that never packaged itself.
+
+        None of the 2026 capstones registered an entry point, so asking for
+        one asks for a step no team took. Instead the benchmark says what its
+        task is and ``cogbench.resolve`` searches their repository against
+        that by running their functions.
+
+        Recognition keeps something between calls, which clustering does not,
+        so this fills in the fields clustering leaves empty: the orders a team
+        writes a call that files a descriptor under a name, and how to
+        recognize one of their own functions that makes an empty database.
+        The resolver pairs a store with a query itself; what the benchmark
+        supplies is the half both of them need, which is turning a photo into
+        a descriptor.
+
+        The FaceNet model goes in as a named resource because the course hands
+        every team the same object and one audited repository takes it as an
+        argument (`detect_and_describe(model, image)`). It is what
+        ``adapters.instantiate`` already gives a submission that declares
+        itself, so a discovered one getting it too is parity rather than help.
+
+        Built lazily, because it reads the cached dataset and loads the model,
+        and importing a plugin should not do either.
+        """
+
+        from cogbench.discovery_spec import DiscoverySpec
+        from cogbench.pipeline import Fixtures
+
+        from .roles import (
+            DESCRIBE_ROLE,
+            enrollment_arrangements,
+            looks_like_an_empty_database,
+            recognition_accepts,
+            recognition_fixture,
+            write_photos,
+        )
+
+        scenario = next(iter(self.load_cases("test")), None)
+        fixture = recognition_fixture(scenario) if scenario is not None else None
+        if fixture is None:
+            return None
+
+        # Two forms of the same photos. The capstone tells students to write a
+        # function that takes image paths, and one audited team's describe step
+        # reads one; another's takes an array. Their own function decides which
+        # it takes, and the photos are identical either way.
+        forms = Fixtures(((fixture.photos,), (write_photos(fixture.photos),)))
+        return DiscoverySpec(
+            chain_role=DESCRIBE_ROLE,
+            fixture=forms,
+            accepts=lambda chain, enroll, query: recognition_accepts(
+                chain, forms.for_chain(chain)[0], fixture, enroll, query
+            ),
+            arrangements=enrollment_arrangements,
+            factories=looks_like_an_empty_database,
+            extras={"model": _facenet()},
+            hints=("week2", "week 2", "vision", "faces", "capstone"),
+            expects="the name of the person the benchmark enrolled",
+        )
+
+    def submission_from_discovery(self, submission: Any) -> Any:
+        """Turn a resolved repository into the object ``run`` expects.
+
+        The adapters are kept so ``score`` can say what their describe step
+        found. A run whose detector finds nothing scores what a submission
+        that answers None to everything scores, and the metric's diagnostics
+        read that as a cutoff being too strict, which sends a team to the one
+        number that is not their problem.
+        """
+
+        from .discovered import build_recognition
+
+        adapter = build_recognition(submission)
+        self._discovered.append(adapter)
+        return adapter
 
 
 class ClusteringBenchmark:
@@ -307,6 +394,69 @@ class ClusteringBenchmark:
         from .discovered import build
 
         return build(submission)
+
+
+def _describing_notes(adapters: Sequence[Any]) -> List[str]:
+    """What their describe step found, which no metric can show.
+
+    Both of these end as None, which the scorer counts as saying "I do not
+    know this person". A run full of them scores what a submission that
+    answers None to everything scores, and the metric's diagnostics then send
+    the team to their cutoff, which is the one thing that is not the problem.
+
+    An answer their matching function gave that says neither a name nor
+    nobody is not here. That is a contract failure and `DiscoveredRecognition`
+    raises for it, the same as a declared submission does.
+    """
+
+    def total(name: str) -> int:
+        return sum(getattr(adapter, name) for adapter in adapters)
+
+    def count(number: int, thing: str) -> str:
+        return f"{number} {thing}" if number == 1 else f"{number} {thing}s"
+
+    notes = []
+    unenrolled = total("photos_not_enrolled")
+    if unenrolled:
+        notes.append(
+            f"Of the photos the benchmark asked you to remember somebody"
+            f" from, your step that describes a photo found no face in"
+            f" {count(unenrolled, 'one')}. Those people were enrolled from"
+            " fewer photos than it looks like, or from none. Check the"
+            " detection probability you keep faces above."
+        )
+    unanswered = total("photos_not_answered")
+    if unanswered:
+        notes.append(
+            f"Your step that describes a photo found no face in "
+            f"{count(unanswered, 'photo')} you were asked about, and those were"
+            " answered as unknown before your matching function saw them."
+        )
+    extra = total("faces_not_asked_about")
+    if extra:
+        notes.append(
+            f"{count(extra, 'extra face')} turned up in photos of one person"
+            " each. This benchmark asks about the first face your step returns"
+            " and counts the rest, so a second detection costs nothing here,"
+            " but it is worth knowing your detector found one."
+        )
+    return notes
+
+
+def _facenet() -> Any:
+    """The model the benchmark hands a describe step that asks for one.
+
+    The same class and the same device the runner scores with
+    (`cogbench.runner._facenet_model`), constructed here because
+    ``discovery()`` runs before a run does and a repository whose describe step
+    takes the model cannot be searched for without one. A missing FaceNet
+    surfaces as the reason discovery is unavailable, which is the same setup
+    problem ``cogworks check`` reports under `modelCache`.
+    """
+
+    from facenet_models import FacenetModel
+
+    return FacenetModel(device="cpu")
 
 
 def _public_manifest(tier: str) -> Mapping[str, Any]:
