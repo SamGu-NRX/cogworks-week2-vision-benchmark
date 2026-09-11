@@ -1031,6 +1031,17 @@ def descriptors_in(answer: Any) -> List[Any]:
     and a step that picks one face hands back a vector. All three say the same
     thing about the same photo.
 
+    A composite answer is read for the descriptors in it and the rest is left
+    alone, which is how `(boxes, descriptors)` yields its descriptors when a
+    chain hands back the whole tuple. The cost, and it is a real one: a valid
+    descriptor beside something that is not a descriptor at all is read as one
+    descriptor rather than refused, so a describe step that breaks for one face
+    and not another is scored on the face that worked. Refusing a composite
+    instead would refuse the return shape three of the five audited
+    repositories write, and the width floor above already keeps the boxes from
+    being read as the descriptors. An answer with nothing usable in it does
+    raise; see `describes_no_face` and `DiscoveredRecognition._describe`.
+
     Each row is copied out, because this is where the benchmark takes a value
     student code produced and starts keeping it. A describe step that writes
     into one array every call is a thing a team writes to avoid allocating,
