@@ -108,22 +108,24 @@ class DiscoveredRecognition:
     from, once a photo yields no face or two.
     """
 
-    #: One photo, one face: the first their describe step returned, on both
-    #: sides. A contract that asks for one label per photo has to reduce their
-    #: per-face answer to a per-photo one somewhere, and every way of doing it
-    #: leans, so this picks the way that leans least and says which way.
-    #:
-    #: The alternative was to enrol every face and then answer with the first
-    #: one their matcher recognized, and it leans twice in the same direction:
-    #: a spurious box filed under a person is what a later stranger matches,
-    #: and reading past a face their matcher rejected can only turn a correct
-    #: rejection into a name, never the reverse.
-    #:
-    #: For a team who picks a face themselves this is their pick, because it
-    #: happened inside their own describe step; for one who returns them all
-    #: it is their detector's order. Extra faces are counted and never asked
-    #: about. This is part of the contract, so changing it is a new benchmark
-    #: version rather than an edit.
+    # One photo, one face: the first their describe step returned, on both
+    # sides. A contract that asks for one label per photo has to reduce their
+    # A contract that asks for one label per photo has to reduce their
+    # per-face answer to a per-photo one somewhere, and every way of doing it
+    # leans, so this picks the way that leans least and says which way.
+    #
+    # The alternative was to enrol every face and then answer with the first
+    # one their matcher recognized, and it leans twice in the same direction:
+    # a spurious box filed under a person is what a later stranger matches,
+    # and reading past a face their matcher rejected can only turn a correct
+    # rejection into a name, never the reverse.
+    #
+    # For a team who picks a face themselves this is their pick, because it
+    # happened inside their own describe step; for one who returns them all
+    # it is their detector's order. Extra faces are counted and never asked
+    # about. The acceptance test asks the same question (`roles._attempt`), so
+    # the search cannot prove a binding the run will not execute. This is part
+    # of the contract, so changing it is a new benchmark version.
 
     def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any) -> None:
         self._chain = list(chain)
@@ -135,11 +137,17 @@ class DiscoveredRecognition:
         # read back as an identification or as none.
         self._known: set = set()
         # What happened to a photo before their matcher saw it, and what came
-        # back that this could not read. Counted rather than dropped: all
-        # three end as None, a run of them scores exactly what a submission
-        # that answers None to everything scores, and the metric's own
-        # diagnostics read that as a cutoff being strict. `score` says so.
-        self.photos_without_a_face = 0
+        # back that this could not read. Counted rather than dropped, because
+        # all of it ends as None: a run of them scores exactly what a
+        # submission that answers None to everything scores, and the metric's
+        # own diagnostics read that as a cutoff being strict. `score` says so.
+        #
+        # Enrolment and query are counted apart because the fix differs. A
+        # query photo with no face is answered unknown; an enrolment photo
+        # with no face leaves that person's profile thinner, or empty, and
+        # every later question about them suffers for it.
+        self.photos_not_enrolled = 0
+        self.photos_not_answered = 0
         self.faces_not_asked_about = 0
         self.answers_not_read = 0
 
@@ -150,6 +158,8 @@ class DiscoveredRecognition:
         for rows in self._describe(images):
             if rows:
                 self._enroll(person_id, rows[0])
+            else:
+                self.photos_not_enrolled += 1
 
     def recognize(self, images: Sequence[Any]) -> List[Optional[str]]:
         """One answer per photo: what their query said about its first face.
@@ -166,6 +176,7 @@ class DiscoveredRecognition:
         answers: List[Optional[str]] = []
         for rows in self._describe(images):
             if not rows:
+                self.photos_not_answered += 1
                 answers.append(None)
                 continue
             answer = self._query(rows[0])
@@ -193,7 +204,6 @@ class DiscoveredRecognition:
             photos = write_photos(photos)
         with _somewhere_throwaway():
             described = [descriptors_in(_run(self._chain, [photo])) for photo in photos]
-        self.photos_without_a_face += sum(1 for rows in described if not rows)
         self.faces_not_asked_about += sum(len(rows) - 1 for rows in described if rows)
         return described
 

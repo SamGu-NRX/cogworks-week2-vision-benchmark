@@ -406,36 +406,43 @@ def _describing_notes(adapters: Sequence[Any]) -> List[str]:
     """
 
     def total(name: str) -> int:
-        return sum(int(getattr(adapter, name, 0)) for adapter in adapters)
+        return sum(getattr(adapter, name) for adapter in adapters)
 
     def count(number: int, thing: str) -> str:
         return f"{number} {thing}" if number == 1 else f"{number} {thing}s"
 
     notes = []
-    missing = total("photos_without_a_face")
-    if missing:
+    unenrolled = total("photos_not_enrolled")
+    if unenrolled:
         notes.append(
-            f"Your step that describes a photo found no face in {missing} of "
-            "them, and those were answered as unknown before your matcher saw "
-            "them. Check the detection probability you keep faces above."
+            f"Your step that describes a photo found no face in "
+            f"{count(unenrolled, 'photo')} the benchmark asked you to remember"
+            " somebody from, so that person was enrolled from fewer photos than"
+            " it looks like, or from none. Check the detection probability you"
+            " keep faces above."
+        )
+    unanswered = total("photos_not_answered")
+    if unanswered:
+        notes.append(
+            f"Your step that describes a photo found no face in "
+            f"{count(unanswered, 'photo')} you were asked about, and those were"
+            " answered as unknown before your matching function saw them."
         )
     extra = total("faces_not_asked_about")
     if extra:
         notes.append(
-            f"{count(extra, 'extra face')} turned up in photos of one person "
-            "each. This benchmark asks about the first face your step returns "
-            "and counts "
-            "the rest, so a second detection costs nothing here, but it is "
-            "worth knowing your detector found one."
+            f"{count(extra, 'extra face')} turned up in photos of one person"
+            " each. This benchmark asks about the first face your step returns"
+            " and counts the rest, so a second detection costs nothing here,"
+            " but it is worth knowing your detector found one."
         )
     unread = total("answers_not_read")
     if unread:
         notes.append(
-            f"{count(unread, 'answer')} from your matching function said "
-            "nothing this could read as a name or as nobody, and was scored as "
-            "unknown. A "
-            "name, or None, or a tuple or dictionary holding exactly one of "
-            "those, is what it reads."
+            f"{count(unread, 'answer')} from your matching function said"
+            " nothing this could read as a name or as nobody, and was scored as"
+            " unknown. A name, or None, or a tuple or dictionary holding"
+            " exactly one of those, is what it reads."
         )
     return notes
 

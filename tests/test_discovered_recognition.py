@@ -416,13 +416,15 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
     their problem.
     """
 
-    def notes_after(self, images):
+    def notes_after(self, images, enrol=None, query=None):
         from facial_recognition_benchmark.plugins import RecognitionBenchmark
 
         plugin = RecognitionBenchmark()
         found = self.resolve(NORMAL)
         adapter = plugin.submission_from_discovery(found)
-        adapter.enroll("ada", [photo(1)])
+        if query is not None:
+            adapter._query = query
+        adapter.enroll("ada", enrol if enrol is not None else [photo(1)])
         adapter.recognize(images)
         plugin.score(
             [run_recognition_scenario(lambda *a, **k: adapter, FakeFaceNet(), FIRST)],
@@ -430,20 +432,54 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
         )
         return plugin.last_diagnostics
 
-    def test_photos_their_step_found_no_face_in_are_counted_and_said(self):
+    def test_query_photos_their_step_found_no_face_in_are_said(self):
         notes = self.notes_after([photo(), photo(), photo(1)])
 
-        self.assertTrue(any("found no face in" in note for note in notes), notes)
+        self.assertTrue(any("you were asked about" in note for note in notes), notes)
+
+    def test_an_enrolment_photo_with_no_face_is_a_different_sentence(self):
+        # The fix differs: a query photo is answered unknown, an enrolment
+        # photo leaves that person's profile thinner and every later question
+        # about them suffers.
+        notes = self.notes_after([photo(1)], enrol=[photo(), photo()])
+
+        self.assertTrue(any("asked you to remember" in note for note in notes), notes)
+        self.assertFalse([n for n in notes if "you were asked about" in n], notes)
 
     def test_faces_it_never_asked_about_are_counted_and_said(self):
         notes = self.notes_after([photo(1, 2, 3)])
 
         self.assertTrue(any("extra faces" in note for note in notes), notes)
 
+    def test_an_answer_it_could_not_read_is_said(self):
+        notes = self.notes_after([photo(1)], query=lambda descriptor: 0.4)
+
+        self.assertTrue(any("said nothing this could read" in note for note in notes), notes)
+
     def test_a_clean_run_says_none_of_it(self):
         notes = self.notes_after([photo(1)])
 
-        self.assertFalse([note for note in notes if "found no face" in note], notes)
+        self.assertEqual(
+            [note for note in notes if "your step" in note.lower() or "answer" in note],
+            [],
+            notes,
+        )
+
+    def test_each_run_reports_only_its_own(self):
+        # The adapters are kept on the plugin so `score` can read them, so a
+        # second run must not inherit the first one's counts.
+        from facial_recognition_benchmark.plugins import RecognitionBenchmark
+
+        plugin = RecognitionBenchmark()
+        found = self.resolve(NORMAL)
+
+        def build(*args, **kwargs):
+            return plugin.submission_from_discovery(found)
+
+        plugin.run(build, FakeFaceNet(), [FIRST])
+        plugin.run(build, FakeFaceNet(), [FIRST])
+
+        self.assertEqual(len(plugin._discovered), 1)
 
 
 #: A query that ranks the nearest rows and never rejects, beside one that puts

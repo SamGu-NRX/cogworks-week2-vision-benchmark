@@ -679,10 +679,12 @@ def _grouping(labels: Sequence[Any]) -> frozenset:
 #
 # The descriptor step is the half both sides share, and running one chain for
 # both removes one cause of a miss: their two halves cannot disagree about
-# what a descriptor is, because both were handed the same vectors. What that
-# leaves is separable, which is the point. Their detector is counted and
-# reported (`plugins._describing_notes`), so a miss belongs to their matcher
-# or their cutoff and the run says which.
+# what a descriptor is, because both were handed the same vectors. And what
+# their detector did is counted separately (`plugins._describing_notes`), so
+# a photo it found no face in is named as that rather than counted as a miss.
+# A miss on a photo where a face was found is still theirs to look for among
+# the descriptor, the matcher and the cutoff; nothing here says which of the
+# three.
 #
 # The cost, written down because the opposite is easy to claim: this does not
 # reveal a team whose enrolment describes a face one way and whose query
@@ -858,7 +860,12 @@ def _attempt(described, fixture, enroll_call, query_call):
     enrolled = 0
     for name, positions in fixture.enrollment:
         for position in positions:
-            for row in described[position]:
+            # The first face and no other, which is what the scored run does
+            # (`DiscoveredRecognition`). A search that read every face proved
+            # bindings the run could not execute: a photo with a spurious
+            # detection in front of the person answered during the search and
+            # came back unknown when it was scored.
+            for row in described[position][:1]:
                 try:
                     # A copy per attempt, on top of the one `descriptors_in`
                     # made. These rows are cached and served to every store
@@ -908,7 +915,7 @@ def _attempt(described, fixture, enroll_call, query_call):
 
 
 def _asked(query_call, rows, known):
-    """Who the store says is in one photo, or a refusal sentence.
+    """Who the store says is in the first face of one photo, or a refusal.
 
     Returns ``(name_or_None, None)`` on an answer and ``(None, detail)`` when
     their query raised. The two are separated because a query that raises is a
@@ -916,15 +923,13 @@ def _asked(query_call, rows, known):
     binding making a decision.
     """
 
-    for row in rows:
-        try:
-            answer = query_call(row.copy())
-        except BaseException as error:  # noqa: BLE001 - student code raises anything
-            return None, f"querying raised {type(error).__name__}: {str(error)[:120]}"
-        who = named(answer, known)
-        if who is not None:
-            return who, None
-    return None, None
+    if not rows:
+        return None, None
+    try:
+        answer = query_call(rows[0].copy())
+    except BaseException as error:  # noqa: BLE001 - student code raises anything
+        return None, f"querying raised {type(error).__name__}: {str(error)[:120]}"
+    return named(answer, known), None
 
 
 def enrollment_arrangements(store, person_id: str, descriptor: Any):
