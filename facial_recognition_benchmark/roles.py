@@ -53,8 +53,10 @@ __all__ = [
     "enrollment_arrangements",
     "looks_like_an_empty_database",
     "looks_like_face_descriptors",
+    "describes_no_face",
     "named",
     "readable",
+    "shortly",
     "recognition_accepts",
     "recognition_fixture",
 ]
@@ -941,7 +943,7 @@ def _asked(query_call, rows, known):
         # raises on this shape, so accepting it would prove a binding the run
         # cannot execute, which is the one thing the search must never do.
         return None, (
-            f"querying answered {repr(answer)[:80]}, which says neither a name "
+            f"querying answered {shortly(answer)}, which says neither a name "
             "nor nobody"
         )
     return named(answer, known), None
@@ -1029,6 +1031,17 @@ def descriptors_in(answer: Any) -> List[Any]:
     and a step that picks one face hands back a vector. All three say the same
     thing about the same photo.
 
+    A composite answer is read for the descriptors in it and the rest is left
+    alone, which is how `(boxes, descriptors)` yields its descriptors when a
+    chain hands back the whole tuple. The cost, and it is a real one: a valid
+    descriptor beside something that is not a descriptor at all is read as one
+    descriptor rather than refused, so a describe step that breaks for one face
+    and not another is scored on the face that worked. Refusing a composite
+    instead would refuse the return shape three of the five audited
+    repositories write, and the width floor above already keeps the boxes from
+    being read as the descriptors. An answer with nothing usable in it does
+    raise; see `describes_no_face` and `DiscoveredRecognition._describe`.
+
     Each row is copied out, because this is where the benchmark takes a value
     student code produced and starts keeping it. A describe step that writes
     into one array every call is a thing a team writes to avoid allocating,
@@ -1067,14 +1080,57 @@ def named(answer: Any, known: Any) -> Optional[str]:
     return said if said in known else None
 
 
+def shortly(value: Any) -> str:
+    """One short line describing a value, even one whose `repr` raises.
+
+    Their objects are theirs, and `__repr__` is their code. A refusal that
+    raised while writing itself escaped the acceptance test, and the resolver
+    does not catch anything from `accepts`, so it ended the whole search.
+    """
+
+    try:
+        text = repr(value)
+    except BaseException:  # noqa: BLE001 - their __repr__ raises anything
+        return f"a {type(value).__name__} whose repr() raised"
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+def describes_no_face(answer: Any) -> bool:
+    """Whether their describe step said "no face here" rather than nothing.
+
+    `descriptors_in` hands back no rows for both, and the two mean opposite
+    things. An empty array, a None, or a sequence of those is their detector
+    answering: it looked and found nobody, and the benchmark scores that photo
+    as unknown. A mapping, a string, or a number is not an answer to the
+    question at all, and scoring it as "no face" would launder a broken
+    describe step into a correct rejection, which is exactly what an unreadable
+    matcher answer used to do one layer down.
+    """
+
+    if answer is None:
+        return True
+    if isinstance(answer, np.ndarray):
+        # No rows, rather than no numbers. A `(2, 0)` array is two faces whose
+        # descriptors came back empty, which is a describe step that broke
+        # halfway rather than a detector that found nobody, and reading it as
+        # the second would hide the first.
+        if answer.ndim == 1:
+            return answer.size == 0
+        return answer.ndim == 2 and answer.shape[0] == 0
+    if isinstance(answer, (list, tuple)):
+        return all(describes_no_face(part) for part in answer)
+    return False
+
+
 def readable(answer: Any) -> bool:
     """Whether their answer says anything this can read as a name or as none.
 
     False is not a rejection. It is an answer shaped like nothing the contract
-    has a word for: a bare number, an empty list, a mapping that states two
-    names. It is scored as though they had said "I do not know this person",
-    because ending a scenario over one is worse than scoring it, and it is
-    counted so that it is not laundered into a rejection in silence.
+    has a word for: a bare number, an empty list, a mapping stating both a name
+    and a nothing. `DiscoveredRecognition.recognize` raises on it and the
+    acceptance test refuses it, because scoring it as a rejection would hand a
+    submission the credit for saying "I do not know this person" on output that
+    never said anything.
     """
 
     return _stated_name(answer) is not _UNREADABLE
@@ -1099,12 +1155,17 @@ def _stated_name(answer: Any) -> Any:
 
     And the answer's parts must say one thing. A `("ada", 0.2)` pair and a
     `{"prediction": "unknown", "similarity": 0.4, "results": [...]}` mapping
-    each state exactly one name-shaped part, so each is read. Something that
-    states two, like a mapping holding both a decision and the nearest name
-    beside it, is not an answer this can read, and guessing between them means
-    the reading depends on which the team wrote first. None of the audited
-    repositories answers that way; a team who does is refused at the
-    acceptance test rather than scored on a coin toss.
+    each state exactly one name-shaped part, so each is read, and `(None,
+    None)` states two that agree, so it is read as nobody.
+
+    A mapping holding both a name and a nothing is refused, and that is not an
+    oversight. `{"prediction": "ada", "distance": None}` means a name with no
+    distance reported; `{"prediction": None, "nearest_name": "ada"}` means
+    nobody, beside the name it was nearest to. They are the same shape and
+    opposite answers, so reading either one is guessing, and the guess would
+    turn on which key the team wrote first. None of the audited repositories
+    answers that way, and a team who does is refused rather than scored on a
+    coin toss.
 
     A team whose only query answers with a ranking and no decision is likewise
     not read. `DiscoverySpec.readers` is what the SDK provides for running one
@@ -1117,6 +1178,12 @@ def _stated_name(answer: Any) -> Any:
         return _UNREADABLE
     parts = answer.values() if isinstance(answer, dict) else answer
     said = [part for part in parts if part is None or isinstance(part, str)]
+    if not said:
+        return _UNREADABLE
+    if all(part is None for part in said):
+        # `(None, None)` is a name and a distance, both absent. Nothing is
+        # ambiguous about it: every part says nobody.
+        return None
     return said[0] if len(said) == 1 else _UNREADABLE
 
 
@@ -1141,7 +1208,16 @@ def _described(chain: Sequence[Any], photos: Sequence[Any]) -> List[List[Any]]:
     key = tuple(chain)
     if _DESCRIBED and _DESCRIBED[0] == key and _same_photos(_DESCRIBED[1], photos):
         return _DESCRIBED[2]
-    described = [descriptors_in(_run(chain, [photo])) for photo in photos]
+    described = []
+    for photo in photos:
+        answer = _run(chain, [photo])
+        rows = descriptors_in(answer)
+        if not rows and not describes_no_face(answer):
+            # Not "no face here", which their detector is entitled to say, but
+            # a shape that is not an answer to the question. Reading it as no
+            # face would accept a binding the scored run raises on.
+            raise TypeError(f"describing a photo answered {shortly(answer)}")
+        described.append(rows)
     _DESCRIBED[:] = [key, list(photos), described]
     return described
 

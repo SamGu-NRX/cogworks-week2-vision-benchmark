@@ -8,7 +8,7 @@
   "tracks": {
     "vision-recognition": {
       "benchmark_version": 2,
-      "scorer_version": "recognition-v1",
+      "scorer_version": "recognition-v2",
       "primary_metric": "recognition_score"
     },
     "vision-clustering": {

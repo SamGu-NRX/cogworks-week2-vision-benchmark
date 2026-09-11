@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -50,9 +50,12 @@ class ShuffledQueryBatches:
 class RecognitionScenario:
     """One complete known-to-unknown recognition lifecycle.
 
-    The same fresh adapter is retained across initial enrollment, known
-    queries, unknown rejection, enrollment of that unknown identity, and
-    held-out re-identification.
+    The same fresh adapter is retained across initial enrollment, questions
+    about the people it was told about, unknown rejection, enrollment of that
+    unknown identity, held-out re-identification, and further questions about
+    the people it already knew. Those last ones are the point of retaining one
+    adapter: a submission that forgets everybody when it learns somebody new
+    is a submission that has not done the task.
 
     ``shuffled_queries`` is absent for a locally built scenario, which is the
     case a student runs against the public manifests and the case
@@ -114,6 +117,11 @@ def run_recognition_scenario(
     -------
     dict
         Labels for known, pre-enrollment unknown, and post-enrollment queries.
+
+    Two ``recognize`` calls with the enrolment between them. Each person's
+    held-out photos are split across the two, so a person with two or more of
+    them is asked about on both sides of the enrolment. See ``query_phases``
+    for why, and ``ShuffledQueryBatches`` for the hosted lane it shares it with.
     """
 
     adapter = adapt_recognition(instantiate(factory, model))
@@ -126,27 +134,154 @@ def run_recognition_scenario(
     if batches is not None:
         return _run_shuffled_queries(adapter, scenario, batches)
 
-    known_images: List[Image] = []
-    for identity in scenario.known:
-        known_images.extend(identity.queries)
-    known = _recognition_labels(adapter.recognize(known_images), len(known_images), "known")
+    images = canonical_query_images(scenario)
+    known_query_counts = tuple(len(identity.queries) for identity in scenario.known)
+    known_count = sum(known_query_counts)
+    unknown_count = len(scenario.unknown_queries)
+    before_slots, after_slots = query_phases(
+        known_query_counts,
+        unknown_count=unknown_count,
+        post_count=len(scenario.post_enrollment_queries),
+        seed=_local_query_seed(scenario),
+    )
 
-    unknown_before = _recognition_labels(
-        adapter.recognize(scenario.unknown_queries),
-        len(scenario.unknown_queries),
-        "unknown-before-enrollment",
-    )
+    # Every slot is written exactly once, because `query_phases` partitions
+    # them and a test there pins that. So a `None` here is a real prediction,
+    # not an unasked slot, and the two do not need telling apart. The hosted
+    # lane keeps an `_UNFILLED` sentinel for the same array because its slots
+    # arrive from a submission's answer batches, which can be short.
+    answers: List[Optional[PersonId]] = [None] * len(images)
+    _ask(adapter, images, before_slots, answers, "before-enrollment")
     adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
-    post_enrollment = _recognition_labels(
-        adapter.recognize(scenario.post_enrollment_queries),
-        len(scenario.post_enrollment_queries),
-        "post-enrollment",
-    )
+    _ask(adapter, images, after_slots, answers, "after-enrollment")
+
     return {
-        "known": known,
-        "unknown_before": unknown_before,
-        "post_enrollment": post_enrollment,
+        "known": answers[:known_count],
+        "unknown_before": answers[known_count : known_count + unknown_count],
+        "post_enrollment": answers[known_count + unknown_count :],
     }
+
+
+def _ask(
+    adapter: Any,
+    images: Sequence[Image],
+    slots: Sequence[int],
+    answers: List[Optional[PersonId]],
+    phase: str,
+) -> None:
+    """One ``recognize`` call, with each answer filed under the slot it came from."""
+
+    batch = [images[slot] for slot in slots]
+    labels = _recognition_labels(adapter.recognize(batch), len(batch), phase)
+    for slot, label in zip(slots, labels):
+        answers[slot] = label
+
+
+def canonical_query_images(scenario: RecognitionScenario) -> List[Image]:
+    """Every held-out photo in the order the gold is built in.
+
+    Each known identity's photos in turn, then the stranger's photos from
+    before the enrolment, then the ones from after. ``recognition_expected``
+    builds its answer vector in exactly this order, so slot *i* here and entry
+    *i* there are the same photograph. Both lanes number slots this way, which
+    is what lets them share ``query_phases``.
+    """
+
+    images: List[Image] = []
+    for identity in scenario.known:
+        images.extend(identity.queries)
+    images.extend(scenario.unknown_queries)
+    images.extend(scenario.post_enrollment_queries)
+    return images
+
+
+def _local_query_seed(scenario: RecognitionScenario) -> int:
+    """The permutation a local run asks in, derived from the case's own names.
+
+    Stable, because a submission scored twice has to see the same questions.
+    Not secret, and not pretending to be: the names are in the public manifest
+    and this function is readable, so a submission can recompute it, replay the
+    permutation and score without opening a photograph. That was reproduced on
+    both public tiers. Nothing local can close it, because the submission runs
+    in this process and can read anything this knows, which is why the local
+    command prints LOCAL and SELF-REPORTED. The hosted lane supplies its own
+    seed, and hiding it is that lane's problem to solve.
+    """
+
+    import hashlib
+
+    names = "|".join(
+        [identity.person_id for identity in scenario.known] + [scenario.unknown_person_id]
+    )
+    return int(hashlib.sha256(names.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def query_phases(
+    known_query_counts: Sequence[int],
+    *,
+    unknown_count: int,
+    post_count: int,
+    seed: int,
+) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    """Which canonical query slot is asked before the enrolment, and which after.
+
+    One deal, used by both lanes. The local driver maps the slots back to
+    photographs; the hosted controller keeps them as its private map from a
+    shuffled batch to a scored answer. Before this they dealt differently, and
+    the same submission could score two numbers depending on where it ran.
+
+    Half of each person's own held-out photos go before the enrolment and half
+    after, the odd one after. Recognition is not only naming somebody you were
+    told about, it is still naming them after you have been told about somebody
+    else, and a submission that emptied its database whenever it learned a new
+    person answered every question a lifecycle asks when all the known
+    questions come first. Splitting each person's own photos rather than
+    pooling everybody's is what makes that measurable for every person instead
+    of a randomly chosen subset.
+
+    Then both phases are shuffled. Without it each is the known people in
+    enrolment order followed by the stranger's photos, and a submission that
+    keeps the names it was given and answers by position scores full marks
+    without looking at a photograph: measured at 1.0 before the shuffle and
+    0.125 after.
+
+    What the shuffle is worth depends on whether the caller's ``seed`` can be
+    recomputed by the submission, and that is the caller's question rather than
+    this one's. See ``_local_query_seed`` for what the local lane can promise.
+
+    The seed only orders the photos within a phase; which phase a photo lands
+    in comes from the counts alone. So two lanes with different seeds ask the
+    same person about the same photos on the same side of the enrolment, and a
+    submission that does not depend on the order of a batch scores the same in
+    both. That is what lets the hosted lane keep its seed secret without
+    keeping a second lifecycle.
+
+    The three counts are keyword-only because ``unknown_count`` and
+    ``post_count`` are adjacent integers that a caller can transpose silently:
+    the partition still covers every slot, so it looks right, and the
+    stranger's photos simply land on the wrong sides.
+    """
+
+    import random
+
+    known_count = sum(known_query_counts)
+    before: List[int] = []
+    after: List[int] = []
+    at = 0
+    for count in known_query_counts:
+        split = count // 2
+        before.extend(range(at, at + split))
+        after.extend(range(at + split, at + count))
+        at += count
+    before.extend(range(known_count, known_count + unknown_count))
+    after.extend(
+        range(known_count + unknown_count, known_count + unknown_count + post_count)
+    )
+
+    shuffle = random.Random(seed)
+    shuffle.shuffle(before)
+    shuffle.shuffle(after)
+    return tuple(before), tuple(after)
 
 
 def _run_shuffled_queries(

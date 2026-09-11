@@ -175,13 +175,21 @@ class DiscoveredRecognition:
         `drivers._recognition_labels` for the same offence, so both paths
         raise the same error and the runner categorizes it the same way.
 
-        A photo their describe step found no face in is separate and stays a
-        rejection: their system saw nothing to name, which is a thing their
-        detector decided rather than a shape this cannot read.
+        The acceptance test refuses the same shape, so a repository whose
+        rejection path answers this way is refused rather than left to fail
+        mid-run. What the student reads while it is refused is the resolver's
+        own headline: it keeps the acceptance test's sentence for its internal
+        reporting and drops it at the pairing loop.
+
+        A photo their describe step said it found no face in is separate and
+        stays a rejection: their detector looked and answered nobody. A
+        describe step that answers with something that is not about faces at
+        all is not that, and `_describe` raises for it rather than letting it
+        become a rejection one layer up.
         """
 
         from .adapters import AdapterContractError
-        from .roles import named, readable
+        from .roles import named, readable, shortly
 
         answers: List[Optional[str]] = []
         for rows in self._describe(images):
@@ -192,7 +200,7 @@ class DiscoveredRecognition:
             answer = self._query(rows[0])
             if not readable(answer):
                 raise AdapterContractError(
-                    f"Your matching function answered {_shortly(answer)} for one "
+                    f"Your matching function answered {shortly(answer)} for one "
                     "photo, which says neither a name nor nobody. Return a name, "
                     "or None, or a tuple or mapping stating exactly one of those."
                 )
@@ -205,7 +213,8 @@ class DiscoveredRecognition:
         # Imported here rather than at module scope, like everything else
         # this file takes from `.roles`: that module needs cogbench, and this
         # package is importable, and its other suites run, without it.
-        from .roles import _run, descriptors_in, write_photos
+        from .adapters import AdapterContractError
+        from .roles import _run, describes_no_face, descriptors_in, shortly, write_photos
 
         photos = list(images)
         # The photos go in as the form their first function was bound with:
@@ -216,17 +225,32 @@ class DiscoveredRecognition:
         # `write_photos` makes a directory that lives until the process ends.
         if getattr(self._chain[0], "form", None) == 1:
             photos = write_photos(photos)
+        described = []
         with _somewhere_throwaway():
-            described = [descriptors_in(_run(self._chain, [photo])) for photo in photos]
+            for photo in photos:
+                answer = _run(self._chain, [photo])
+                # Read and judged before the next photo runs, both for the same
+                # reason: a describe step that hands back the same object every
+                # call has already changed it by then. `descriptors_in` copies
+                # the rows out, and waiting to ask whether an answer with no
+                # rows meant "no face" let a later call turn an earlier
+                # malformed answer into a legitimate one.
+                rows = descriptors_in(answer)
+                if not rows and not describes_no_face(answer):
+                    # Their detector saying "nobody here" is an answer and is
+                    # scored as unknown. This is not that: it is a shape that
+                    # says nothing about faces, and scoring it as a rejection
+                    # would give a broken describe step the credit for a
+                    # correct one.
+                    raise AdapterContractError(
+                        f"Your step that describes a photo answered "
+                        f"{shortly(answer)}, which holds no face descriptors and "
+                        "is not a way of saying there were none. Return the "
+                        "descriptors, or an empty array, or None."
+                    )
+                described.append(rows)
         self.faces_not_asked_about += sum(len(rows) - 1 for rows in described if rows)
         return described
-
-
-def _shortly(value: Any) -> str:
-    """An answer, short enough to put in one sentence."""
-
-    text = repr(value)
-    return text if len(text) <= 80 else text[:77] + "..."
 
 
 @contextlib.contextmanager
