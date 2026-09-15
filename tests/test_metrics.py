@@ -84,20 +84,40 @@ class TestRecognitionDiagnostics:
         }]
         return score_recognition(actual, expected)
 
-    def test_total_abstention_is_named_as_the_cutoff(self):
+    def test_total_abstention_points_at_enrollment_and_the_cutoff(self):
+        """Both are worth looking at: returning no name does not say which.
+
+        A submission returns None for whatever reason it has, and nothing
+        here sees a distance, a threshold or whether the profile was stored.
+        """
+
         scores = self._case([None, None])
         assert scores["post_enrollment_accuracy"] == 0.0
         notes = " ".join(scores["_diagnostics"]).lower()
+        assert "stored a profile" in notes
         assert "cutoff" in notes
-        assert "one photo" in notes
+        # Every graded scenario enrolls the new person from three images
+        # (`manifests/public-evaluation.json`), so advice about a profile
+        # built from one photo described a run this never produces.
+        assert "one photo" not in notes
 
-    def test_misnaming_is_not_blamed_on_the_cutoff(self):
-        """Wrong name means the threshold passed; the fix is elsewhere."""
+    def test_the_two_ways_of_failing_are_sent_to_different_places(self):
+        """Why they are counted apart. Being named someone else and being
+        named nobody are different things to go and look at, and neither
+        outcome on its own says which part of their code produced it."""
 
-        scores = self._case(["someone_else", "someone_else"])
-        notes = " ".join(scores["_diagnostics"])
-        assert "someone else's name" in notes
-        assert "not the threshold" in notes
+        confused = " ".join(self._case(["someone_else", "someone_else"])["_diagnostics"])
+        abstained = " ".join(self._case([None, None])["_diagnostics"])
+
+        assert "someone else's name" in confused
+        assert "which profile they matched" in confused
+        assert confused != abstained
+        # A wrong name does not establish that a threshold admitted it.
+        assert "not the threshold" not in confused
+        # Nor is it the shape a too-strict cutoff makes. That note has no
+        # correct answers to go on either, so it used to fire here too.
+        assert "keep strangers out" not in confused
+        assert "keep strangers out" in abstained
 
     def test_a_working_lifecycle_produces_no_complaint(self):
         scores = self._case(["new", "new"])
@@ -118,7 +138,10 @@ class TestRecognitionDiagnostics:
             "post_enrollment": ["new"],
         }]
         notes = " ".join(score_recognition(actual, expected)["_diagnostics"])
-        assert "never fires" in notes
+        # The shape is still called out; what it is called is the observation
+        # rather than a conclusion about their threshold.
+        assert "no stranger was ever rejected" in notes
+        assert "returns None" in notes
 
     def test_diagnostics_do_not_leak_into_the_metric_mapping(self):
         """The plugin must strip the key; the runner floats every value."""

@@ -138,7 +138,8 @@ class DiscoveredRecognition:
         # What their describe step found. Counted rather than dropped, because
         # it ends as None either way: a run of it scores exactly what a
         # submission that answers None to everything scores, and the metric's
-        # own diagnostics read that as a cutoff being strict. `score` says so.
+        # own diagnostics report it as queries coming back with no name.
+        # `score` says so.
         #
         # Enrolment and query are counted apart because the fix differs. A
         # query photo with no face is answered unknown; an enrolment photo

@@ -138,7 +138,7 @@ class TestSpreadIsPerScenario:
         assert metrics["clustering_seed_spread"] == 0.0
         note = " ".join(bench.last_diagnostics)
         # One primary seed plus three sweep seeds, not a case count.
-        assert "across 4 seeds" in note
+        assert "the 4 seeds" in note
 
     def test_the_worst_scenario_sets_the_reported_spread(self):
         bench = ClusteringBenchmark()
