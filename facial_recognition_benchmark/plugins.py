@@ -247,8 +247,8 @@ class ClusteringBenchmark:
         "clustering_seed_spread": (
             "How much the pairwise F1 moved when the same photos were clustered "
             "again under different random seeds. Whispers picks a random visit "
-            "order, so this says whether your answer is about the faces or about "
-            "that order. A wide spread usually means some random choice is not "
+            "order, so this says how much your answer moved when that order "
+            "changed. A wide spread usually means some random choice is not "
             "using the seed you were given. This is reported and never scored."
         ),
     }
@@ -327,16 +327,14 @@ class ClusteringBenchmark:
                 self.last_diagnostics.append(
                     "Re-running the same images under {} different seeds moved the F1 by "
                     "{:.2f} (from {:.2f} to {:.2f}). Whispers picks a random visit order, "
-                    "so a spread this wide means the answer depends on that order more "
-                    "than on the faces. Check that every random choice uses the seed you "
-                    "were given.".format(seed_count, spread, min(f1s), max(f1s))
+                    "so a spread this wide means your answer moves with that order. Check "
+                    "that every random choice uses the seed you were "
+                    "given.".format(seed_count, spread, min(f1s), max(f1s))
                 )
             elif spread <= 0.02:
                 self.last_diagnostics.append(
-                    "The clustering held to within {:.3f} F1 across {} seeds, so the "
-                    "answer is about the faces rather than the visit order.".format(
-                        spread, seed_count
-                    )
+                    "The clustering held to within {:.3f} F1 across the {} seeds this "
+                    "run tried.".format(spread, seed_count)
                 )
         return metrics
 
