@@ -126,7 +126,13 @@ class DiscoveredRecognition:
     # the search cannot prove a binding the run will not execute. This is part
     # of the contract, so changing it is a new benchmark version.
 
-    def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any) -> None:
+    def __init__(self, chain: Sequence[Any], enroll_call: Any, query_call: Any,
+                 submission: Any = None) -> None:
+        #: The reading these three calls answer out of, when this adapter owns
+        #: it. `build_recognition` makes one per scenario and hands it over; a
+        #: caller that keeps its own reading passes nothing and goes on
+        #: closing it itself.
+        self._submission = submission
         self._chain = list(chain)
         self._enroll = enroll_call
         self._query = query_call
@@ -147,6 +153,20 @@ class DiscoveredRecognition:
         self.photos_not_enrolled = 0
         self.photos_not_answered = 0
         self.faces_not_asked_about = 0
+
+    def close(self) -> None:
+        """Let go of the reading, keeping what the run still has to report.
+
+        Their three calls raise once the namespace behind them is gone. The
+        counters stay: `score` reads them after every scenario has run, and
+        what their describe step found is a fact rather than a live handle.
+
+        Idempotent, and a no-op for an adapter that was handed no reading.
+        """
+
+        submission, self._submission = self._submission, None
+        if submission is not None:
+            submission.close()
 
     def enroll(self, person_id: str, images: Sequence[Any]) -> None:
         """File the first face in each of these photos under one name."""
@@ -293,19 +313,17 @@ def build_recognition(submission: Any) -> DiscoveredRecognition:
     database their own code just made.
 
     A team whose database is a module global has nothing to rebuild, and this
-    cannot give them an empty one. What happens then depends on their code:
-    the search's probing writes into a global it cannot restore, and a store
-    that reads those rows back raises and is refused, while one that ignores
-    them binds and starts the run holding the two people the search enrolled.
-    `roles.named` keeps those two out of an answer, because it hands back only
-    names the run itself enrolled, but it cannot keep them from competing.
-    None of the audited repositories has that shape and reaches a run. Giving
-    them an empty database would mean restoring a module's globals between
-    attempts, which belongs to whatever is calling their functions rather than
-    to the week describing the task.
+    cannot give them an empty one: restoring a module's globals between
+    attempts belongs to whatever calls their functions, not to the week
+    describing the task. None of the audited repositories has that shape and
+    reaches a run.
+
+    The reading goes with the adapter, because the adapter is the only thing
+    that will ever use it. `drivers` closes it when the scenario ends, and
+    their modules and this reading's model go with it.
     """
 
     if not getattr(submission, "ready", False):
         raise RuntimeError("This repository did not resolve, so there is nothing to run.")
     ready = submission.fresh()
-    return DiscoveredRecognition(ready.chain, ready.enroll, ready.query)
+    return DiscoveredRecognition(ready.chain, ready.enroll, ready.query, submission=ready)

@@ -7,6 +7,7 @@ are the non-zero numbers along its first row, so a test can say exactly who is
 in a picture and how many.
 """
 
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -197,6 +198,35 @@ def adapter_for(found):
     return RecognitionBenchmark().submission_from_discovery(found)
 
 
+class _ModelContext:
+    """The week's model hook, shaped like `plugins._facenet_for_reading`.
+
+    The SDK enters one of these when a reading opens and leaves it when that
+    reading is released, so counting both ends is how a test says which
+    readings a run made and whether it let them go. One model per reading, as
+    the real hook does; what it yields is `FakeFaceNet`, and nothing here
+    loads FaceNet.
+    """
+
+    def __init__(self, model=None):
+        self.given = model
+        self.made = []
+        self.left = 0
+
+    @property
+    def opened(self):
+        return len(self.made)
+
+    @contextlib.contextmanager
+    def __call__(self, _root, _namespace, _inputs):
+        model = self.given if self.given is not None else FakeFaceNet()
+        self.made.append(model)
+        try:
+            yield {"model": model}
+        finally:
+            self.left += 1
+
+
 class _ARecognitionSearch(unittest.TestCase):
     """Runs the plugin's own discovery fields against a repository on disk."""
 
@@ -231,6 +261,10 @@ class _ARecognitionSearch(unittest.TestCase):
             self.every_said.append(detail)
             return passed, detail
 
+        # The model arrives the way `plugins.discovery` declares it, through
+        # `construct`, so these tests run the shape a scored run runs: one
+        # model per reading, released with that reading.
+        self.models = _ModelContext(model)
         return resolve(
             root,
             chain_role=DESCRIBE_ROLE,
@@ -238,7 +272,7 @@ class _ARecognitionSearch(unittest.TestCase):
             accepts=accepts,
             arrangements=enrollment_arrangements,
             factories=looks_like_an_empty_database,
-            extras={"model": model if model is not None else FakeFaceNet()},
+            construct=self.models,
         )
 
     def why(self):
@@ -329,8 +363,8 @@ class EachScenarioStartsFromADatabaseTheirOwnCodeJustMade(_ARecognitionSearch):
 
 
 #: The same code with its database in a module global, which is what one
-#: audited repository does. Nothing here can be rebuilt, so the second
-#: scenario inherits the first.
+#: audited repository does. Their own code never empties it, so what it holds
+#: depends entirely on who imported the module and when.
 A_DATABASE_THAT_NEVER_RESETS = '''
 import numpy as np
 
@@ -360,23 +394,35 @@ def whose_face(descriptor, cutoff=0.4):
 '''
 
 
-class ADatabaseInAModuleGlobalIsNotIsolated(_ARecognitionSearch):
-    """A limit of the platform, written down rather than worked around.
+class ADatabaseInAModuleGlobalStartsEachRunEmpty(_ARecognitionSearch):
+    """This used to be a written-down limit, and the SDK closed it.
 
-    Nothing at this layer can give a module global an empty database: the
-    benchmark cannot know which of their functions writes to one before it
-    calls it, and restoring a module's globals between attempts belongs to
-    whatever is doing the calling. What happens instead depends on their code.
-    This one reads back rows the search's probing left behind, raises, and is
-    refused, which is the better of the two outcomes available; the other is a
-    run scored against rows the benchmark put there itself.
+    A module global was once either refused, because the rows the search left
+    made their query raise, or scored against people the benchmark itself had
+    enrolled. Each run of a binding now imports their modules again into a
+    namespace of its own (`cogbench._namespace.Project`), so `_DB` is the
+    empty dict their module body makes. The two leaks that mattered are the
+    assertions: the search's fixture people, and the last scenario's.
     """
 
-    def test_the_repository_is_refused_rather_than_scored_against_that(self):
+    def test_the_search_s_people_are_not_in_the_first_scored_run(self):
         found = self.resolve(A_DATABASE_THAT_NEVER_RESETS)
 
-        self.assertFalse(found.ready)
-        self.assertEqual(found.verdict.status, "not_wired")
+        self.assertTrue(found.ready, self.why())
+        first, _ = self.scored(found, FIRST)
+
+        self.assertEqual(first["known"], ["ada", "ada", "bea", "bea"])
+        self.assertEqual(first["unknown_before"], [None])
+
+    def test_the_first_scenario_s_people_are_not_in_the_second(self):
+        found = self.resolve(A_DATABASE_THAT_NEVER_RESETS)
+
+        self.scored(found, FIRST)
+        second, scores = self.scored(found, SECOND)
+
+        self.assertEqual(second["known"], ["dov", "dov", "eve", "eve"])
+        self.assertEqual(second["unknown_before"], [None])
+        self.assertEqual(scores["recognition_score"], 1.0)
 
 
 class EveryQueryPhotoGetsExactlyOneAnswer(_ARecognitionSearch):
@@ -1233,3 +1279,150 @@ class AnAnswerIsJudgedBeforeTheNextPhotoRuns(_ARecognitionSearch):
 
         with self.assertRaises(AdapterContractError):
             adapter.recognize([photo(1), photo(1)])
+
+
+class _Raises:
+    """A chain step standing in for a describe step that raises."""
+
+    form = None
+
+    def __init__(self, error):
+        self.error = error
+        self.call = self._call
+        self.bound = self._call
+
+    def _call(self, *args):
+        raise self.error
+
+
+class TheScenarioLetsGoOfTheReadingItWasBuiltOn(_ARecognitionSearch):
+    """One reading per scenario, and it does not outlive the scenario.
+
+    `discovered.build_recognition` reads the repository again for each
+    scenario, and that reading holds their imported modules and the model the
+    week's hook built for it. Nothing else has a handle on it, so a scenario
+    that ends without releasing it leaves one model and one namespace per case
+    alive for the whole run.
+
+    `_ModelContext` counts both ends of the week's hook, which is what says a
+    reading was released rather than merely dropped. The counts are compared
+    across the scenario rather than against zero, because the search's own
+    reading stays open for as long as the resolved submission does.
+    """
+
+    def _run_like_a_scenario_does(self, chain=None):
+        """The plugin, the adapters it builds, and the factory a run calls."""
+
+        from facial_recognition_benchmark.plugins import RecognitionBenchmark
+
+        found = self.resolve(NORMAL)
+        self.assertTrue(found.ready, self.why())
+        plugin = RecognitionBenchmark()
+        built = []
+
+        def factory(*_args, **_kwargs):
+            adapter = plugin.submission_from_discovery(found)
+            if chain is not None:
+                adapter._chain = [chain]
+            built.append(adapter)
+            return adapter
+
+        return plugin, built, factory
+
+    def readings(self):
+        """How many of the week's models this run has made, and released."""
+
+        return self.models.opened, self.models.left
+
+    def test_a_scenario_that_finishes_releases_its_reading(self):
+        plugin, built, factory = self._run_like_a_scenario_does()
+        opened, left = self.readings()
+
+        output = run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+
+        self.assertEqual(output["known"], ["ada", "ada", "bea", "bea"])
+        self.assertEqual(self.readings(), (opened + 1, left + 1))
+        self.assertEqual(len(built), 1)
+
+    def test_their_functions_stop_answering_once_the_scenario_is_over(self):
+        from cogbench.resolve import Closed
+
+        plugin, built, factory = self._run_like_a_scenario_does()
+
+        run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+
+        with self.assertRaises(Closed):
+            built[0].recognize([photo(1)])
+
+    def test_what_the_run_still_has_to_report_survives_the_release(self):
+        # `score` reads the adapters after every scenario has run, so the
+        # counters have to outlive the reading the adapter was built on.
+        plugin, built, factory = self._run_like_a_scenario_does()
+
+        output = run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+        scores = plugin.score([output], [FIRST])
+
+        self.assertEqual(built[0].photos_not_enrolled, 0)
+        self.assertEqual(scores["recognition_score"], 1.0)
+
+    def test_a_contract_failure_part_way_through_releases_it_too(self):
+        from facial_recognition_benchmark.adapters import AdapterContractError
+
+        plugin, built, factory = self._run_like_a_scenario_does(
+            chain=_Answers({"error": "broken detector"})
+        )
+        opened, left = self.readings()
+
+        with self.assertRaises(AdapterContractError):
+            run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+
+        self.assertEqual(self.readings(), (opened + 1, left + 1))
+
+    def test_their_code_raising_part_way_through_releases_it_too(self):
+        plugin, built, factory = self._run_like_a_scenario_does(
+            chain=_Raises(RuntimeError("their detector fell over"))
+        )
+        opened, left = self.readings()
+
+        with self.assertRaises(RuntimeError):
+            run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+
+        self.assertEqual(self.readings(), (opened + 1, left + 1))
+
+    def test_two_scenarios_are_two_readings_and_two_models(self):
+        plugin, built, factory = self._run_like_a_scenario_does()
+        opened, left = self.readings()
+
+        run_recognition_scenario(factory, FakeFaceNet(), FIRST)
+        run_recognition_scenario(factory, FakeFaceNet(), SECOND)
+
+        self.assertEqual(self.readings(), (opened + 2, left + 2))
+        self.assertIsNot(self.models.made[-1], self.models.made[-2])
+
+    def test_an_adapter_nobody_handed_a_reading_closes_nothing(self):
+        # The distinction the driver turns on: a submission's own factory
+        # returns an object this only borrowed, and closing it would close
+        # something the caller is still holding.
+        from facial_recognition_benchmark.discovered import DiscoveredRecognition
+
+        found = self.resolve(NORMAL)
+        ready = found.fresh()
+        borrowed = DiscoveredRecognition(ready.chain, ready.enroll, ready.query)
+
+        borrowed.close()
+
+        borrowed.enroll("ada", [photo(1)])
+        self.assertEqual(borrowed.recognize([photo(1)]), ["ada"])
+        ready.close()
+
+    def test_the_model_hook_loads_nothing_when_it_is_only_called(self):
+        # The hook is a generator: `plugins.discovery` names it and returns,
+        # and FaceNet is imported when a reading enters it. A plugin import
+        # that loaded a model would do it once for every repository in the
+        # process, before anything asked for one.
+        from facial_recognition_benchmark.plugins import _facenet_for_reading
+
+        sys.modules.pop("facenet_models", None)
+        _facenet_for_reading(Path("."), (), {})
+
+        self.assertNotIn("facenet_models", sys.modules)

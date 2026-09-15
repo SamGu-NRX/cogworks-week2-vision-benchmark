@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from .datasets import (
     CacheStatus,
@@ -151,9 +152,12 @@ class RecognitionBenchmark:
         argument (`detect_and_describe(model, image)`). It is what
         ``adapters.instantiate`` already gives a submission that declares
         itself, so a discovered one getting it too is parity rather than help.
+        It rides ``construct`` rather than ``extras``, which is one mapping
+        every reading shares, so a model put there would be one model for
+        every repository resolved in this process.
 
-        Built lazily, because it reads the cached dataset and loads the model,
-        and importing a plugin should not do either.
+        Built lazily, because it reads the cached dataset and importing a
+        plugin should not. FaceNet is later still, when a reading opens.
         """
 
         from cogbench.discovery_spec import DiscoverySpec
@@ -186,7 +190,7 @@ class RecognitionBenchmark:
             ),
             arrangements=enrollment_arrangements,
             factories=looks_like_an_empty_database,
-            extras={"model": _facenet()},
+            construct=_facenet_for_reading,
             hints=("week2", "week 2", "vision", "faces", "capstone"),
             expects="the name of the person the benchmark enrolled",
         )
@@ -448,20 +452,25 @@ def _describing_notes(adapters: Sequence[Any]) -> List[str]:
     return notes
 
 
-def _facenet() -> Any:
+@contextmanager
+def _facenet_for_reading(
+    _root: Path, _namespace: Any, _inputs: Any
+) -> Iterator[Mapping[str, Any]]:
     """The model the benchmark hands a describe step that asks for one.
 
-    The same class and the same device the runner scores with
-    (`cogbench.runner._facenet_model`), constructed here because
-    ``discovery()`` runs before a run does and a repository whose describe step
-    takes the model cannot be searched for without one. A missing FaceNet
-    surfaces as the reason discovery is unavailable, which is the same setup
-    problem ``cogworks check`` reports under `modelCache`.
+    One per reading, and the same class and device the runner scores with
+    (`cogbench.runner._facenet_model`). A missing FaceNet surfaces as the
+    reason discovery is unavailable, the same setup problem ``cogworks check``
+    reports under `modelCache`.
+
+    Nothing is released on the way out. `FacenetModel` (facenet_models 1.0)
+    defines `__init__`, `detect` and `compute_descriptors` and nothing else, so
+    letting go of the reference is the whole of releasing it.
     """
 
     from facenet_models import FacenetModel
 
-    return FacenetModel(device="cpu")
+    yield {"model": FacenetModel(device="cpu")}
 
 
 def _public_manifest(tier: str) -> Mapping[str, Any]:
