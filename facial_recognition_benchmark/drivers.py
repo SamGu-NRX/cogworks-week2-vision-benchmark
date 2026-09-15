@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -99,6 +100,29 @@ class ClusteringScenario:
 RecognitionOutput = Dict[str, List[Optional[PersonId]]]
 
 
+@contextmanager
+def _recognition_adapter(factory: Any, model: Any) -> Iterator[Any]:
+    """The adapter this scenario runs on, released when the scenario ends.
+
+    `discovered.build_recognition` reads the repository again for each
+    scenario and hands that reading to the adapter, so this closes it whether
+    the scenario finished or raised; the counters `plugins.score` reads
+    afterwards survive the close.
+
+    Only that one. An adapter a submission's own factory returned is the
+    caller's object and this borrowed it.
+    """
+
+    from .discovered import DiscoveredRecognition
+
+    produced = instantiate(factory, model)
+    try:
+        yield adapt_recognition(produced)
+    finally:
+        if isinstance(produced, DiscoveredRecognition):
+            produced.close()
+
+
 def run_recognition_scenario(
     factory: Any, model: Any, scenario: RecognitionScenario
 ) -> RecognitionOutput:
@@ -124,42 +148,42 @@ def run_recognition_scenario(
     for why, and ``ShuffledQueryBatches`` for the hosted lane it shares it with.
     """
 
-    adapter = adapt_recognition(instantiate(factory, model))
-    for identity in scenario.known:
-        adapter.enroll(identity.person_id, identity.enrollment)
+    with _recognition_adapter(factory, model) as adapter:
+        for identity in scenario.known:
+            adapter.enroll(identity.person_id, identity.enrollment)
 
-    # See `recognition_expected` on why this is a getattr: a scenario-shaped
-    # object without the field is a locally built case and takes the plain path.
-    batches = getattr(scenario, "shuffled_queries", None)
-    if batches is not None:
-        return _run_shuffled_queries(adapter, scenario, batches)
+        # See `recognition_expected` on why this is a getattr: a scenario-shaped
+        # object without the field is a locally built case and takes the plain path.
+        batches = getattr(scenario, "shuffled_queries", None)
+        if batches is not None:
+            return _run_shuffled_queries(adapter, scenario, batches)
 
-    images = canonical_query_images(scenario)
-    known_query_counts = tuple(len(identity.queries) for identity in scenario.known)
-    known_count = sum(known_query_counts)
-    unknown_count = len(scenario.unknown_queries)
-    before_slots, after_slots = query_phases(
-        known_query_counts,
-        unknown_count=unknown_count,
-        post_count=len(scenario.post_enrollment_queries),
-        seed=_local_query_seed(scenario),
-    )
+        images = canonical_query_images(scenario)
+        known_query_counts = tuple(len(identity.queries) for identity in scenario.known)
+        known_count = sum(known_query_counts)
+        unknown_count = len(scenario.unknown_queries)
+        before_slots, after_slots = query_phases(
+            known_query_counts,
+            unknown_count=unknown_count,
+            post_count=len(scenario.post_enrollment_queries),
+            seed=_local_query_seed(scenario),
+        )
 
-    # Every slot is written exactly once, because `query_phases` partitions
-    # them and a test there pins that. So a `None` here is a real prediction,
-    # not an unasked slot, and the two do not need telling apart. The hosted
-    # lane keeps an `_UNFILLED` sentinel for the same array because its slots
-    # arrive from a submission's answer batches, which can be short.
-    answers: List[Optional[PersonId]] = [None] * len(images)
-    _ask(adapter, images, before_slots, answers, "before-enrollment")
-    adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
-    _ask(adapter, images, after_slots, answers, "after-enrollment")
+        # Every slot is written exactly once, because `query_phases` partitions
+        # them and a test there pins that. So a `None` here is a real prediction,
+        # not an unasked slot, and the two do not need telling apart. The hosted
+        # lane keeps an `_UNFILLED` sentinel for the same array because its slots
+        # arrive from a submission's answer batches, which can be short.
+        answers: List[Optional[PersonId]] = [None] * len(images)
+        _ask(adapter, images, before_slots, answers, "before-enrollment")
+        adapter.enroll(scenario.unknown_person_id, scenario.unknown_enrollment)
+        _ask(adapter, images, after_slots, answers, "after-enrollment")
 
-    return {
-        "known": answers[:known_count],
-        "unknown_before": answers[known_count : known_count + unknown_count],
-        "post_enrollment": answers[known_count + unknown_count :],
-    }
+        return {
+            "known": answers[:known_count],
+            "unknown_before": answers[known_count : known_count + unknown_count],
+            "post_enrollment": answers[known_count + unknown_count :],
+        }
 
 
 def _ask(
