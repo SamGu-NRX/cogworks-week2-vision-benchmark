@@ -111,6 +111,10 @@ class TestRecognitionDiagnostics:
         assert confused != abstained
         # A wrong name does not establish that a threshold admitted it.
         assert "not the threshold" not in confused
+        # Nor is it the shape a too-strict cutoff makes. That note has no
+        # correct answers to go on either, so it used to fire here too.
+        assert "too strict" not in confused
+        assert "too strict" in abstained
 
     def test_a_working_lifecycle_produces_no_complaint(self):
         scores = self._case(["new", "new"])

@@ -123,8 +123,9 @@ def recognition_diagnostics(
             "Check that enrolling them stored a profile, then compare the "
             "distances these queries produce against the distances between "
             "photos of someone enrolled from several images: a profile built "
-            "from one photo sits further from a new photo of that person, so "
-            "see whether one cutoff can serve both."
+            "from one photo can sit further from a new photo of that person "
+            "than one built from several, so see whether one cutoff can serve "
+            "both."
         )
     elif post_total and post_abstained > post_confused and post_abstained:
         notes.append(
