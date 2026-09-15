@@ -43,8 +43,11 @@ class TestCutoffTooStrict:
     rejected, and the newly enrolled person rejected along with them.
 
     Taken from a real submission at known 0.83 / unknown 1.00 / post 0.00.
-    A profile built from one photo sits further from a new photo than a
-    profile built from several does, so one cutoff cannot serve both.
+    In that submission a profile built from one photo sat further from a new
+    photo than a profile built from several did, so one cutoff could not
+    serve both. The graded scenarios enroll from three images, so that
+    explanation belongs to that case rather than to every run with this
+    shape.
     """
 
     @pytest.fixture
@@ -64,10 +67,10 @@ class TestCutoffTooStrict:
         assert scores["unknown_rejection_recall"] == 1.0
         assert scores["post_enrollment_accuracy"] == 0.0
 
-    def test_the_diagnostic_names_the_cutoff_rather_than_the_descriptors(self, scores):
+    def test_the_diagnostic_names_what_to_go_and_check(self, scores):
         note = " ".join(scores["_diagnostics"]).lower()
         assert "cutoff" in note
-        assert "one photo" in note or "one image" in note
+        assert "stored a profile" in note
 
 
 class TestCutoffTooGenerous:

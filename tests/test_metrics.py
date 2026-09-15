@@ -96,7 +96,10 @@ class TestRecognitionDiagnostics:
         notes = " ".join(scores["_diagnostics"]).lower()
         assert "stored a profile" in notes
         assert "cutoff" in notes
-        assert "one photo" in notes
+        # Every graded scenario enrolls the new person from three images
+        # (`manifests/public-evaluation.json`), so advice about a profile
+        # built from one photo described a run this never produces.
+        assert "one photo" not in notes
 
     def test_the_two_ways_of_failing_are_sent_to_different_places(self):
         """Why they are counted apart. Being named someone else and being
@@ -113,8 +116,8 @@ class TestRecognitionDiagnostics:
         assert "not the threshold" not in confused
         # Nor is it the shape a too-strict cutoff makes. That note has no
         # correct answers to go on either, so it used to fire here too.
-        assert "too strict" not in confused
-        assert "too strict" in abstained
+        assert "keep strangers out" not in confused
+        assert "keep strangers out" in abstained
 
     def test_a_working_lifecycle_produces_no_complaint(self):
         scores = self._case(["new", "new"])
@@ -135,7 +138,10 @@ class TestRecognitionDiagnostics:
             "post_enrollment": ["new"],
         }]
         notes = " ".join(score_recognition(actual, expected)["_diagnostics"])
-        assert "never fires" in notes
+        # The shape is still called out; what it is called is the observation
+        # rather than a conclusion about their threshold.
+        assert "no stranger was ever rejected" in notes
+        assert "returns None" in notes
 
     def test_diagnostics_do_not_leak_into_the_metric_mapping(self):
         """The plugin must strip the key; the runner floats every value."""

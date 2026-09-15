@@ -121,18 +121,18 @@ def recognition_diagnostics(
         notes.append(
             "Every query for the newly enrolled person came back as unknown. "
             "Check that enrolling them stored a profile, then compare the "
-            "distances these queries produce against the distances between "
-            "photos of someone enrolled from several images: a profile built "
-            "from one photo can sit further from a new photo of that person "
-            "than one built from several, so see whether one cutoff can serve "
-            "both."
+            "distances these queries produce against your cutoff and against "
+            "the distances you get between photos of someone who was enrolled "
+            "before them."
         )
     elif post_total and post_abstained > post_confused and post_abstained:
         notes.append(
             "{} of {} queries for the newly enrolled person came back as unknown "
             "rather than named. Compare the distances those queries produce "
-            "against your cutoff, and against the distances between photos of "
-            "someone enrolled from several images.".format(post_abstained, post_total)
+            "against your cutoff, and against the distances you get between "
+            "photos of someone who was enrolled before them.".format(
+                post_abstained, post_total
+            )
         )
     elif post_confused:
         notes.append(
@@ -147,16 +147,16 @@ def recognition_diagnostics(
     # strict abstains, it does not misname.
     if unknown_rejection >= 0.999 and post_abstained and not post_correct:
         notes.append(
-            "Rejecting every stranger and recognizing none of them after "
-            "enrollment is what a cutoff that is too strict looks like from both "
-            "sides at once. If one distance threshold decides both, that is the "
-            "number to look at."
+            "Every stranger was rejected and nobody was recognized after "
+            "enrollment. If one distance threshold decides both, that is the "
+            "number to look at: the same value has to admit a new person and "
+            "keep strangers out."
         )
     if known_identification >= 0.999 and unknown_rejection <= 0.001:
         notes.append(
-            "Every known face was identified and no stranger was ever rejected, "
-            "which is what happens when the cutoff never fires: check that an "
-            "answer above your distance threshold actually returns None."
+            "Every known face was identified and no stranger was ever rejected. "
+            "Check that an answer above your distance threshold actually returns "
+            "None."
         )
     return notes
 
