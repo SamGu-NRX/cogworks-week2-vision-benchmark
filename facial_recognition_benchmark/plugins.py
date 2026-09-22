@@ -270,7 +270,7 @@ class ClusteringBenchmark:
         from cogbench.discovery_spec import DiscoverySpec
         from cogbench.pipeline import Fixtures
 
-        from .roles import CLUSTER_ROLE, accepts, write_photos
+        from .roles import accepts, cluster_role_for, write_photos
 
         scenario = next(
             (case for case in self.load_cases("test") if getattr(case, "scored", False)),
@@ -287,12 +287,18 @@ class ClusteringBenchmark:
         # 2026 repositories did, so an arrays-only fixture refused every team
         # that followed the instructions. Their own function decides which it
         # takes; the photos are identical either way.
+        forms = Fixtures(((images,), (write_photos(images),)))
+        # The acceptance test hands the chain the form it was bound with.
+        # Before this it always handed arrays, so a team whose first
+        # function took paths was called with the wrong thing and reported
+        # as having run and answered wrongly.
         return DiscoverySpec(
-            chain_role=CLUSTER_ROLE,
-            fixture=Fixtures(((images,), (write_photos(images),))),
-            accepts=lambda chain, *_: accepts(chain, images, expected),
+            chain_role=cluster_role_for(len(images)),
+            fixture=forms,
+            accepts=lambda chain, *_: accepts(chain, forms.for_chain(chain)[0], expected),
             arrangements=None,  # nothing is stored between calls
             hints=("week2", "week 2", "vision", "faces", "capstone"),
+            expects="one group per person",
         )
 
     def submission_from_discovery(self, submission: Any) -> Any:
