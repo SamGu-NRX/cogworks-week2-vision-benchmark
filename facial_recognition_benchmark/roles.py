@@ -468,9 +468,8 @@ def accepts(chain, images, expected):
         )
     if got != _as_grouping(again, len(images)):
         return False, (
-            "grouped the same photos differently the second time, so this step is "
-            "one pass of whispers rather than whispers running until the labels "
-            "stop changing"
+            "grouped the same photos differently the second time, so its answer "
+            "depends on a random choice rather than on the photos"
         )
     want = _grouping(expected)
     if got == want:
