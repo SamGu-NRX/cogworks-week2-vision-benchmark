@@ -334,8 +334,7 @@ class ClusteringBenchmark:
                 )
             elif spread <= 0.02:
                 self.last_diagnostics.append(
-                    "The clustering held to within {:.3f} F1 across {} seeds, so the "
-                    "answer is about the faces rather than any random choice.".format(
+                    "The clustering's F1 held to within {:.3f} across {} seeds.".format(
                         spread, seed_count
                     )
                 )
