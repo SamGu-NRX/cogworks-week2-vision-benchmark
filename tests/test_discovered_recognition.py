@@ -328,10 +328,9 @@ class EachScenarioStartsFromADatabaseTheirOwnCodeJustMade(_ARecognitionSearch):
         self.assertNotIn("ada", second["known"])
 
 
-#: The same code with its database in a module global, which is what one
-#: audited repository does. Nothing here can be rebuilt, so the second
-#: scenario inherits the first.
-A_DATABASE_THAT_NEVER_RESETS = '''
+#: The same code with its database in a module global. The SDK must reread
+#: the module to isolate it because this repository provides no reset method.
+A_DATABASE_IN_A_MODULE_GLOBAL = '''
 import numpy as np
 
 _DB = {}
@@ -360,23 +359,41 @@ def whose_face(descriptor, cutoff=0.4):
 '''
 
 
-class ADatabaseInAModuleGlobalIsNotIsolated(_ARecognitionSearch):
-    """A limit of the platform, written down rather than worked around.
+class ADatabaseInAModuleGlobalIsIsolated(_ARecognitionSearch):
+    """Fresh namespaces isolate probe rows and each scored scenario's people."""
 
-    Nothing at this layer can give a module global an empty database: the
-    benchmark cannot know which of their functions writes to one before it
-    calls it, and restoring a module's globals between attempts belongs to
-    whatever is doing the calling. What happens instead depends on their code.
-    This one reads back rows the search's probing left behind, raises, and is
-    refused, which is the better of the two outcomes available; the other is a
-    run scored against rows the benchmark put there itself.
-    """
+    def test_both_scored_lifecycles_start_without_probe_or_previous_people(self):
+        found = self.resolve(A_DATABASE_IN_A_MODULE_GLOBAL)
+        self.assertTrue(found.ready, self.why())
+        self.addCleanup(found.close)
 
-    def test_the_repository_is_refused_rather_than_scored_against_that(self):
-        found = self.resolve(A_DATABASE_THAT_NEVER_RESETS)
+        for scenario in (FIRST, SECOND):
+            output, scores = self.scored(found, scenario)
+            self.assertEqual(output, recognition_expected(scenario))
+            self.assertEqual(output["unknown_before"], [None])
+            self.assertEqual(scores["recognition_score"], 1.0)
 
-        self.assertFalse(found.ready)
-        self.assertEqual(found.verdict.status, "not_wired")
+        after = adapter_for(found)
+        previous_photos = [photo(who) for who in (1, 4, 7, 11, 14, 17)]
+        self.assertEqual(after.recognize(previous_photos), [None] * 6)
+        # Old rows would win equal-distance ties, even if the adapter hides
+        # their labels. Relabeling the same photos makes that leakage visible.
+        after.enroll("new-person", previous_photos)
+        self.assertEqual(after.recognize(previous_photos), ["new-person"] * 6)
+
+    def test_interleaved_adapters_do_not_share_their_module_global(self):
+        found = self.resolve(A_DATABASE_IN_A_MODULE_GLOBAL)
+        self.assertTrue(found.ready, self.why())
+        self.addCleanup(found.close)
+        first, second = adapter_for(found), adapter_for(found)
+
+        for adapter in (first, second):
+            self.assertEqual(adapter.recognize([photo(1), photo(4)]), [None, None])
+        first.enroll("first-only", [photo(1)])
+        second.enroll("second-only", [photo(1)])
+
+        self.assertEqual(first.recognize([photo(1), photo(4)]), ["first-only", None])
+        self.assertEqual(second.recognize([photo(1), photo(4)]), ["second-only", None])
 
 
 class EveryQueryPhotoGetsExactlyOneAnswer(_ARecognitionSearch):

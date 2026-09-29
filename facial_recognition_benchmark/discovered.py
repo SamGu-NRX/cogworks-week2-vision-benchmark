@@ -284,25 +284,12 @@ def build(submission: Any) -> DiscoveredClustering:
 def build_recognition(submission: Any) -> DiscoveredRecognition:
     """The same repository, wearing the recognition driver's interface.
 
-    `fresh()` is what makes each scenario start empty. Proving the binding
-    works enrolled two people into the team's database, and when that database
-    is an object or one of their own zero-argument factories those two are
-    still in it; scoring from it would leave `fixture_a` competing with the
-    people the case is actually about. The driver builds one of these per
-    scenario, so this runs once per scenario and each one starts from a
-    database their own code just made.
-
-    A team whose database is a module global has nothing to rebuild, and this
-    cannot give them an empty one. What happens then depends on their code:
-    the search's probing writes into a global it cannot restore, and a store
-    that reads those rows back raises and is refused, while one that ignores
-    them binds and starts the run holding the two people the search enrolled.
-    `roles.named` keeps those two out of an answer, because it hands back only
-    names the run itself enrolled, but it cannot keep them from competing.
-    None of the audited repositories has that shape and reaches a run. Giving
-    them an empty database would mean restoring a module's globals between
-    attempts, which belongs to whatever is calling their functions rather than
-    to the week describing the task.
+    The driver builds one adapter per scenario. `fresh()` rereads the team's
+    modules into a new SDK-owned namespace, so objects, factory databases and
+    module globals all start without the search's probe rows or a previous
+    scenario's enrollments. The module-global fixture in
+    `test_discovered_recognition.py` exercises both scored lifecycles and
+    interleaved adapters.
     """
 
     if not getattr(submission, "ready", False):
