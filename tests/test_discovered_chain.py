@@ -376,7 +376,7 @@ class OnePassOfWhispersIsNotWhispers(unittest.TestCase):
         passed, detail = accepts(chain, self._photos(4), [0, 0, 1, 1])
 
         self.assertFalse(passed)
-        self.assertIn("second time", detail)
+        self.assertIn("run again under another seed", detail)
 
 
 def _written(name, source):
