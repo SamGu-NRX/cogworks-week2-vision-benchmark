@@ -475,6 +475,7 @@ class WhatTheirStepFoundReachesTheRunPage(_ARecognitionSearch):
         notes = self.notes_after([photo(1)], enrol=[photo(), photo()])
 
         self.assertTrue(any("asked you to remember" in note for note in notes), notes)
+        self.assertTrue(any("found no face in 2 photos." in note for note in notes), notes)
         self.assertFalse([n for n in notes if "you were asked about" in n], notes)
 
     def test_faces_it_never_asked_about_are_counted_and_said(self):

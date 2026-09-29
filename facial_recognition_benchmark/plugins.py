@@ -246,9 +246,10 @@ class ClusteringBenchmark:
         ),
         "clustering_seed_spread": (
             "How much the pairwise F1 moved when the same photos were clustered "
-            "again under different random seeds. Whispers picks a random visit "
-            "order, so this says whether your answer is about the faces or about "
-            "that order. A wide spread usually means some random choice is not "
+            "again under different random seeds. If your clustering makes random "
+            "choices, such as the visit order in Whispers, this says whether your "
+            "answer is about the faces or about those choices. A wide spread "
+            "usually means some random choice is not "
             "using the seed you were given. This is reported and never scored."
         ),
     }
@@ -326,15 +327,15 @@ class ClusteringBenchmark:
             if spread >= 0.15:
                 self.last_diagnostics.append(
                     "Re-running the same images under {} different seeds moved the F1 by "
-                    "{:.2f} (from {:.2f} to {:.2f}). Whispers picks a random visit order, "
-                    "so a spread this wide means the answer depends on that order more "
-                    "than on the faces. Check that every random choice uses the seed you "
+                    "{:.2f} (from {:.2f} to {:.2f}). A spread this wide means the answer "
+                    "depends on some random choice, such as a visit order, more than on "
+                    "the faces. Check that every random choice uses the seed you "
                     "were given.".format(seed_count, spread, min(f1s), max(f1s))
                 )
             elif spread <= 0.02:
                 self.last_diagnostics.append(
                     "The clustering held to within {:.3f} F1 across {} seeds, so the "
-                    "answer is about the faces rather than the visit order.".format(
+                    "answer is about the faces rather than any random choice.".format(
                         spread, seed_count
                     )
                 )
@@ -426,7 +427,7 @@ def _describing_notes(adapters: Sequence[Any]) -> List[str]:
         notes.append(
             f"Of the photos the benchmark asked you to remember somebody"
             f" from, your step that describes a photo found no face in"
-            f" {count(unenrolled, 'one')}. Those people were enrolled from"
+            f" {count(unenrolled, 'photo')}. Those people were enrolled from"
             " fewer photos than it looks like, or from none. Check the"
             " detection probability you keep faces above."
         )
