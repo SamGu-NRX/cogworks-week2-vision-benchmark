@@ -1,4 +1,12 @@
-"""Deterministic recognition and label-invariant clustering metrics."""
+"""Deterministic recognition and label-invariant clustering metrics.
+
+The pure scoring layer behind ``plugins.py``: no I/O, no model, no randomness,
+so the same inputs always produce the same floats. Recognition is scored per
+expected identity (a macro average) plus a two-part unknown-person lifecycle;
+clustering is scored by pairwise F1 with the adjusted Rand index as a
+diagnostic. Wrong-length or missing inputs degrade to zero-valued metrics,
+never to an exception and never to a renormalized denominator.
+"""
 
 from __future__ import annotations
 
@@ -15,15 +23,56 @@ def score_recognition(
 ) -> Dict[str, float]:
     """Score known identification and the unknown-person lifecycle.
 
-    Malformed, missing, or wrong-length behavior produces zero-valued metrics
-    rather than silently changing the denominator.
+    The five metrics, each in [0, 1]:
+
+    - ``known_identification``: accuracy within each expected identity, then
+      the mean of those per-identity accuracies. This is a macro average, so
+      a person with one query weighs exactly as much as a person with ten;
+      the score cannot be raised by flooding easy identities with queries.
+    - ``unknown_rejection_recall``: fraction of ``unknown_before`` queries
+      answered ``None`` (the stranger was turned away).
+    - ``post_enrollment_accuracy``: fraction of ``post_enrollment`` queries
+      answered with the expected id. Abstentions and wrong names both count
+      against it; `recognition_diagnostics` separates the two because their
+      fixes differ.
+    - ``unknown_lifecycle``: mean of unknown rejection recall and
+      post-enrollment accuracy. Rejecting strangers and then recognizing
+      those same people after enrollment are the two halves of one distance
+      cutoff, so they are averaged rather than summed.
+    - ``recognition_score``: mean of ``known_identification`` and
+      ``unknown_lifecycle``.
+
+    The returned mapping carries one extra key, ``_diagnostics``, whose value
+    is a list of explanation strings from `recognition_diagnostics` -- the
+    only non-float in the mapping. The scoring plugin pops it onto its
+    ``last_diagnostics`` surface before reporting numbers; anything else
+    reading the mapping as floats must pop it too.
+
+    Malformed input voids the whole submission rather than shrinking the
+    denominator: a case-count mismatch between ``outputs`` and ``expected``,
+    an empty ``expected``, a wrong-length list in any tracked field, or a
+    ``None`` inside the expected known labels all return the all-zero
+    mapping, without a ``_diagnostics`` key. A missing field in a case
+    mapping behaves as an empty list. An empty unknown or post-enrollment
+    list leaves that component at 0.0 instead of dividing by zero, so a
+    submission with no stranger or post-enrollment queries at all scores
+    0.5, not 1.0.
 
     Parameters
     ----------
     outputs
-        Student labels produced for each recognition scenario.
+        Student labels produced for each recognition scenario: one mapping
+        per scenario, each holding ``known``, ``unknown_before``, and
+        ``post_enrollment`` lists of predicted ids (``None`` to abstain).
     expected
-        Trusted labels derived from the scenario definitions.
+        Trusted labels derived from the scenario definitions, in the same
+        shape and order.
+
+    Returns
+    -------
+    Dict[str, float]
+        The five metrics above; see the notes on ``_diagnostics`` for the
+        one value that is a list instead.
     """
 
     if len(outputs) != len(expected) or not expected:
@@ -113,6 +162,26 @@ def recognition_diagnostics(
     0.05-0.13, so the cutoff is right for those and too strict for a profile
     built from one image. That is a calibration finding, and it is only
     visible if the two ways of failing are counted apart.
+
+    The branch structure, because the priority order is the meaning:
+
+    - Post-enrollment produces at most one note. Total abstention (every
+      query for the new person came back ``None``) is blamed on the cutoff;
+      abstentions that merely outnumber misnamings are blamed on the cutoff
+      too; otherwise any misnaming is blamed on the descriptors or the
+      averaging instead. An even abstain/confuse split therefore reports the
+      confusion only, and the abstentions go unmentioned.
+    - Two further notes are independent and can co-fire with anything
+      above: rejecting every stranger while recognizing none of the newly
+      enrolled (one too-strict cutoff, seen from both sides), and
+      identifying every known face while rejecting no stranger (a cutoff
+      that never fires). Their 0.999 / 0.001 comparisons are
+      float-exactness guards that read as "all" and "none".
+
+    Returns
+    -------
+    List[str]
+        Explanation sentences, possibly empty.
     """
 
     notes: List[str] = []
@@ -127,16 +196,16 @@ def recognition_diagnostics(
         )
     elif post_total and post_abstained > post_confused and post_abstained:
         notes.append(
-            "{} of {} queries for the newly enrolled person were called unknown "
-            "rather than named. That is the cutoff being strict, not a "
-            "descriptor problem.".format(post_abstained, post_total)
+            f"{post_abstained} of {post_total} queries for the newly enrolled person "
+            "were called unknown rather than named. That is the cutoff being "
+            "strict, not a descriptor problem."
         )
     elif post_confused:
         notes.append(
-            "{} of {} queries for the newly enrolled person were given someone "
-            "else's name. The cutoff let them through but the nearest profile was "
-            "the wrong one, so this is the descriptors or the averaging, not the "
-            "threshold.".format(post_confused, post_total)
+            f"{post_confused} of {post_total} queries for the newly enrolled person "
+            "were given someone else's name. The cutoff let them through but the "
+            "nearest profile was the wrong one, so this is the descriptors or "
+            "the averaging, not the threshold."
         )
     if unknown_rejection >= 0.999 and post_total and not post_correct:
         notes.append(
@@ -156,7 +225,28 @@ def recognition_diagnostics(
 def score_clustering(
     outputs: Sequence[Sequence[ClusterId]], expected: Sequence[Sequence[ClusterId]]
 ) -> Dict[str, float]:
-    """Average pairwise F1 and adjusted Rand index across clustering cases."""
+    """Average pairwise F1 and adjusted Rand index across clustering cases.
+
+    The two means returned here are what ``ClusteringBenchmark`` reports. A
+    case whose labels do not match its truth in length, or whose truth is
+    empty, contributes 0.0 to both means but stays in the denominator --
+    wrong-length output is scored as a wrong answer, never dropped. A
+    case-count mismatch between ``outputs`` and ``expected``, or an empty
+    ``expected``, zeroes both metrics outright.
+
+    Parameters
+    ----------
+    outputs
+        One list of predicted cluster ids per clustering case.
+    expected
+        One list of trusted ids per case, in the same order.
+
+    Returns
+    -------
+    Dict[str, float]
+        ``clustering_pairwise_f1`` and ``adjusted_rand_index``, each the
+        mean across cases.
+    """
 
     if len(outputs) != len(expected) or not expected:
         return {"clustering_pairwise_f1": 0.0, "adjusted_rand_index": 0.0}
@@ -178,12 +268,26 @@ def score_clustering(
 def pairwise_f1(actual: Sequence[ClusterId], expected: Sequence[ClusterId]) -> float:
     """Measure whether pairs are grouped together, ignoring label names.
 
+    Every pair of items is asked two questions: do the predicted labels
+    agree, and do the trusted ones. Only the agreement pattern is scored, so
+    ``[9, 9, 2, 2]`` and ``["a", "a", "b", "b"]`` are the same answer --
+    this is what makes the metric cluster-name-invariant. With zero agreeing
+    pairs the precision-recall ratio would divide by zero, so the function
+    short-circuits instead: no pairs at all to score (one item, or every
+    item its own cluster on both sides) is a perfect 1.0, and any
+    disagreement without a single agreeing pair is 0.0.
+
     Parameters
     ----------
     actual
         Cluster identifiers returned by the application.
     expected
         Trusted identity partition.
+
+    Returns
+    -------
+    float
+        F1 over same-cluster pairs, in [0, 1].
     """
 
     true_positive = false_positive = false_negative = 0
@@ -205,7 +309,36 @@ def pairwise_f1(actual: Sequence[ClusterId], expected: Sequence[ClusterId]) -> f
 
 
 def adjusted_rand_index(actual: Sequence[ClusterId], expected: Sequence[ClusterId]) -> float:
-    """Compute the adjusted Rand index without a scikit-learn dependency."""
+    """Compute the adjusted Rand index without a scikit-learn dependency.
+
+    Chance-adjusted agreement between two partitions of the same items:
+    1.0 for identical partitions, near 0.0 for partitions that agree about
+    as often as random pairing would, and negative when they agree less
+    often than chance (an alternating split against a 3+3 truth measures
+    about -0.111). Cluster-label names never matter.
+
+    Degenerate inputs return 1.0 rather than raising or yielding NaN: with
+    fewer than two items there are no pairs to compare, and the correction
+    denominator is zero exactly when both partitions are degenerate in the
+    same way -- every item in one cluster on both sides, or every item alone
+    on both sides. The convention is to read "nothing to disagree about" as
+    a perfect score. A submission that puts everyone in one cluster
+    therefore earns a 1.0 here while `pairwise_f1` scores the same answer
+    strictly below 1.0, which is why the Rand index stays a diagnostic and
+    pairwise F1 stays the primary.
+
+    Parameters
+    ----------
+    actual
+        Cluster identifiers returned by the application.
+    expected
+        Trusted identity partition.
+
+    Returns
+    -------
+    float
+        Adjusted Rand index; 1.0 on the degenerate paths above.
+    """
 
     size = len(expected)
     if size < 2:
