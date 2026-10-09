@@ -1,15 +1,24 @@
 """
 Cosine Distance Calculation Benchmark Module
 
-Tests the correctness and performance of cosine distance calculations including:
-- Calculation accuracy
-- Threshold selection effectiveness
-- Performance with large descriptor sets
+Exercises the reference implementations in ``utils.py``
+(``cosine_distance``, ``cosine_distance_matrix``) for correctness,
+throughput, and match-threshold selection. Part of the self-serve
+diagnostic layer; the scored v2 benchmark
+(``plugins``/``drivers``/``metrics``/``datasets``) does not import this
+module.
+
+Reference cosine behavior, verified at this commit: identical unit vectors
+give 0.0 (within ~1e-16), orthogonal 1.0, opposite 2.0; a zero-norm vector
+is guarded and yields 1.0 (in ``cosine_distance`` and per-row in
+``cosine_distance_matrix``) instead of NaN.
 """
 
-import numpy as np
 import time
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Any, Dict, List
+
+import numpy as np
+
 from facial_recognition_benchmark.utils import cosine_distance, cosine_distance_matrix
 
 
@@ -18,19 +27,34 @@ def benchmark_cosine_distance_accuracy(
     dimension: int = 512
 ) -> Dict[str, Any]:
     """
-    Benchmark cosine distance calculation accuracy.
+    Check ``utils.cosine_distance`` against known cosine geometry.
+
+    Runs up to 10 cases per group regardless of ``num_test_vectors`` (the
+    count is capped, not scaled): identical unit vectors must give 0,
+    orthogonal basis vectors 1, opposite unit vectors 2, and a unit vector
+    perturbed with 0.01 noise must land in [0, 0.5]. Exact groups use a
+    1e-6 tolerance; identical vectors measure ~1e-16 rather than exactly 0
+    because the reference computes ``1 - dot/(norm*norm)`` in floating
+    point. Vectors come from unseeded ``np.random.randn``, so ``actual``
+    values vary run to run while pass/fail stays stable.
     
     Parameters
     ----------
     num_test_vectors : int
-        Number of test vectors to generate.
+        Cap on cases per test group: each group runs min(10,
+        num_test_vectors) cases, so values above 10 change nothing.
     dimension : int
-        Dimension of test vectors.
+        Length of the synthetic test vectors.
     
     Returns
     -------
     Dict[str, Any]
-        Accuracy metrics for cosine distance calculation.
+        ``test_cases`` — per case: ``test`` name, ``expected`` (the three
+        exact groups) or ``expected_range`` (similar group), ``actual``,
+        ``error`` (exact groups only), ``passed``.
+        ``max_error`` / ``avg_error`` — worst and mean error across the
+        three exact groups; the similar group reports no error.
+        ``all_passed`` — False if any case failed.
     """
     results = {
         "test_cases": [],
@@ -143,23 +167,36 @@ def benchmark_cosine_distance_performance(
     num_runs: int = 5
 ) -> Dict[str, Any]:
     """
-    Benchmark cosine distance calculation performance.
+    Time pairwise-loop vs matrix cosine distance on synthetic descriptors.
+
+    For each set size, draws ``size`` unseeded random vectors (rows of a
+    ``size x dimension`` matrix) and times ``num_runs`` rounds of (a) a
+    naive double loop calling ``cosine_distance`` on every pair and (b) one
+    ``cosine_distance_matrix`` call, reporting mean times and throughputs
+    in distances per second (pairwise uses n*(n-1)/2 pairs, matrix n*n).
+    Timing uses ``time.time`` and the data is not seeded, so only the broad
+    loop-vs-matrix ratio is meaningful across machines.
     
     Parameters
     ----------
     vector_sizes : List[int], optional
-        List of vector set sizes to test.
+        Set sizes to sweep; defaults to [10, 50, 100, 500, 1000]. The
+        naive double loop makes large sizes slow (quadratic in ``size``).
     num_test_vectors : int
-        Number of test vectors to generate.
+        ACCEPTED BUT IGNORED — the body never reads it (each set contains
+        ``size`` vectors). Kept so existing call sites keep working.
     dimension : int
-        Dimension of test vectors.
+        Descriptor length of the synthetic vectors.
     num_runs : int
-        Number of runs to average timing.
+        Timing rounds averaged per set size.
     
     Returns
     -------
     Dict[str, Any]
-        Performance metrics including timing for different vector sizes.
+        ``vector_sizes`` — echoed list of set sizes.
+        ``pairwise_times`` / ``matrix_times`` — mean seconds per round.
+        ``pairwise_throughput`` / ``matrix_throughput`` — distances per
+        second, one entry per set size.
     """
     if vector_sizes is None:
         vector_sizes = [10, 50, 100, 500, 1000]
@@ -217,21 +254,38 @@ def benchmark_cosine_distance_threshold(
     thresholds: List[float] = None
 ) -> Dict[str, Any]:
     """
-    Benchmark threshold selection for face matching.
+    Pick the cosine-distance cutoff that best separates same-person from
+    different-person pairs.
+
+    A pair matches when its distance is <= the threshold. Per threshold,
+    the true-positive rate is the fraction of ``same_person_distances``
+    that matches and the false-positive rate the fraction of
+    ``different_person_distances``; an empty list contributes 0.0 (the
+    counters are pre-initialized, so empty inputs are safe). F1 uses real
+    precision, TP / (TP + FP) — an earlier version used 1 - fpr
+    (specificity) and overstated F1. The default sweep is
+    ``np.arange(0.0, 1.0, 0.01)`` — 0.00 to 0.99 in steps of 0.01.
     
     Parameters
     ----------
     same_person_distances : List[float]
-        Distances between descriptors of the same person.
+        Descriptor distances between pairs of the same person.
     different_person_distances : List[float]
-        Distances between descriptors of different people.
+        Descriptor distances between pairs of different people.
     thresholds : List[float], optional
-        List of thresholds to test.
+        Cutoffs to test; defaults to 0.00..0.99 in steps of 0.01.
     
     Returns
     -------
     Dict[str, Any]
-        Threshold analysis including optimal threshold and ROC metrics.
+        ``thresholds`` — echoed cutoffs.
+        ``true_positive_rates`` / ``false_positive_rates`` /
+        ``f1_scores`` — one entry per cutoff, same order.
+        ``optimal_threshold`` — first cutoff with the highest F1, or
+        ``None`` when no cutoffs were given.
+        ``optimal_f1_score`` / ``optimal_tpr`` / ``optimal_fpr`` — values
+        at that cutoff; on an all-zero F1 sweep the first cutoff wins with
+        F1 0.0 (e.g. empty inputs).
     """
     if thresholds is None:
         thresholds = np.arange(0.0, 1.0, 0.01).tolist()
@@ -252,12 +306,12 @@ def benchmark_cosine_distance_threshold(
     f1_list = []
     
     for threshold in thresholds:
-        # Initialize before the branches: with an empty input list the branch
-        # never assigned these, and the read below raised UnboundLocalError.
+        # Initialize before the branches: with an empty input list the
+        # branch never assigned these, and the read below raised
+        # UnboundLocalError. (Only the two counters read below are kept;
+        # the true/false-negative twins were never read anywhere.)
         true_positives = 0
         false_positives = 0
-        true_negatives = 0
-        false_negatives = 0
 
         # True positive rate: same-person pairs correctly matched
         if same_person_distances:

@@ -1,16 +1,26 @@
 """
-Face Detection Benchmark Module
+Legacy face-detection diagnostics.
 
-Tests the MTCNN face detection capabilities including:
-- Detection accuracy on known face images
+Profiles any detector object exposing ``detect(image) ->
+(boxes, probabilities, landmarks)`` — the triple produced by the reference
+application's MTCNN-based FacenetModel, but no specific model class is
+required, so these run against mock detectors in tests. They belong to the
+self-serve diagnostic layer (driven by ``benchmark.py:run_benchmark``); the
+scored v2 benchmark (``plugins``/``drivers``/``metrics``/``datasets``) does
+not import this module.
+
+Coverage:
+- Detection accuracy against per-image ground-truth face counts
 - False positive rejection on non-face images
 - Detection probability threshold effectiveness
 - Detection speed performance
 """
 
-import numpy as np
 import time
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+
 from facial_recognition_benchmark.utils import load_image
 
 
@@ -23,23 +33,50 @@ def benchmark_detection(
     ground_truth_num_faces: Optional[Dict[str, int]] = None
 ) -> Dict[str, Any]:
     """
-    Benchmark face detection performance.
+    Benchmark face detection on labeled face and optional non-face images.
+
+    For each face image the file is loaded, one ``model.detect`` call is
+    timed with ``time.time``, and the detections are recorded. A face image
+    counts as correct only when the detected box count EXACTLY equals the
+    expected count in ``ground_truth_num_faces`` for its path; images
+    without an entry are skipped from the accuracy fraction entirely, so a
+    missing key is not an error — ``detection_accuracy`` simply stays
+    ``None`` when no image was countable. Load and detect failures are
+    printed to stdout and skipped: that shrinks the sample behind the
+    probability and timing averages, while the false-positive rate keeps
+    its full denominator.
 
     Parameters
     ----------
-    model : FacenetModel
-        The face detection model to benchmark.
+    model : object
+        Detector exposing ``detect(image) -> (boxes, probabilities,
+        landmarks)``; only ``len(boxes)`` and ``probabilities`` are read.
     face_images : List[str]
-        List of paths to images containing faces.
+        Paths to images expected to contain faces.
     non_face_images : List[str], optional
-        List of paths to images without faces (for false positive testing).
+        Paths to images expected to contain no faces; any image with at
+        least one detection is recorded as a false positive.
     ground_truth_num_faces : Dict[str, int], optional
-        Dictionary mapping image paths to expected number of faces.
+        Maps face-image paths to the expected face count. Pass it as a
+        keyword: the fourth positional slot once belonged to a dead
+        ``ground_truth_boxes`` parameter that silently swallowed it.
     
     Returns
     -------
     Dict[str, Any]
-        Benchmark results including accuracy, false positive rate, and timing.
+        ``detection_accuracy`` — exact-count accuracy over images with
+        ground truth, or ``None`` when none were countable.
+        ``false_positive_rate`` — fraction of non-face images with at
+        least one detection, or ``None`` without non-face images.
+        ``avg_detection_probability`` — mean over successful face images
+        of the mean detection probability, or ``None`` on no successes.
+        ``avg_detection_time`` — mean wall-clock seconds per successful
+        ``detect`` call on face images, or ``None`` on no successes.
+        ``detections`` — per face image: ``image_path``,
+        ``num_faces_detected``, ``probabilities`` (list),
+        ``detection_time`` (seconds).
+        ``false_positives`` — per offending non-face image:
+        ``image_path``, ``num_false_positives``, ``probabilities`` (list).
     """
     results = {
         "detection_accuracy": None,
@@ -131,7 +168,9 @@ def benchmark_detection(
                 print(f"Error processing {image_path}: {e}")
                 continue
         
-        results["false_positive_rate"] = false_positive_count / total_non_face_images if total_non_face_images > 0 else 0.0
+        results["false_positive_rate"] = (
+            false_positive_count / total_non_face_images if total_non_face_images > 0 else 0.0
+        )
     
     return results
 
@@ -143,23 +182,45 @@ def benchmark_detection_probability_threshold(
     thresholds: List[float] = None
 ) -> Dict[str, Any]:
     """
-    Find optimal detection probability threshold for filtering false positives.
+    Sweep detection-probability thresholds and pick the best by F1.
+
+    Counting is image-level, not box-level: a face image contributes one
+    true positive when ANY of its detection probabilities reaches the
+    threshold, and a non-face image contributes one false positive under
+    the same rule. Rates divide by the number of images SUPPLIED, so an
+    image that failed to load still counts in the denominator. The default
+    sweep is ``np.arange(0.5, 1.0, 0.05)`` — 0.50 to 0.95 in steps of 0.05.
+
+    Note: the "precision" used here is ``1 - false_positive_rate``, which
+    is specificity, not classification precision, so the reported F1 and
+    the ``optimal_threshold`` derived from it are optimistic. The matching
+    distance-space sweep in ``distance.py`` was corrected to real
+    precision; this detection-side variant was left as-is to keep its
+    returned values stable.
     
     Parameters
     ----------
-    model : FacenetModel
-        The face detection model to benchmark.
+    model : object
+        Detector exposing ``detect(image) -> (boxes, probabilities,
+        landmarks)``; only ``probabilities`` are read.
     face_images : List[str]
-        List of paths to images containing faces.
+        Paths to images expected to contain faces.
     non_face_images : List[str]
-        List of paths to images without faces.
+        Paths to images expected to contain no faces.
     thresholds : List[float], optional
-        List of probability thresholds to test.
+        Detection-probability cutoffs to test; defaults to 0.50..0.95 in
+        steps of 0.05.
     
     Returns
     -------
     Dict[str, Any]
-        Results showing accuracy at each threshold and optimal threshold.
+        ``thresholds`` — the cutoffs actually swept (echoed back).
+        ``face_detection_rates`` — per threshold, fraction of face images
+        with at least one detection at or above it.
+        ``false_positive_rates`` — same rule on the non-face images.
+        ``optimal_threshold`` — cutoff with the highest F1 (the first one
+        wins ties), or ``None`` when nothing was swept.
+        ``optimal_f1_score`` — that best F1 (0.0 when nothing was swept).
     """
     if thresholds is None:
         thresholds = np.arange(0.5, 1.0, 0.05).tolist()
@@ -240,21 +301,31 @@ def benchmark_detection_consistency(
     num_runs: int = 5
 ) -> Dict[str, Any]:
     """
-    Test consistency of face detection across multiple runs.
+    Measure run-to-run stability of the detector's face counts.
+
+    Each image is loaded once, then ``model.detect`` runs ``num_runs``
+    times on it. The per-image score is the variance of the detected face
+    counts across runs (0.0 for a deterministic detector), so one flaky
+    image is still visible in ``max_variance`` when the average looks
+    fine. Failed images are printed to stdout and skipped.
     
     Parameters
     ----------
-    model : FacenetModel
-        The face detection model to benchmark.
+    model : object
+        Detector exposing ``detect(image) -> (boxes, probabilities,
+        landmarks)``; only ``len(boxes)`` is read.
     image_paths : List[str]
-        List of paths to test images.
+        Paths to the images to probe repeatedly.
     num_runs : int
-        Number of times to run detection on each image.
+        Detection calls per image (default 5).
     
     Returns
     -------
     Dict[str, Any]
-        Consistency metrics for detection results.
+        ``consistency_scores`` — per image: ``image_path``,
+        ``face_counts`` (one entry per run), ``variance`` of the counts.
+        ``avg_variance`` — mean per-image variance (0.0 when nothing ran).
+        ``max_variance`` — worst per-image variance (0.0 when nothing ran).
     """
     results = {
         "consistency_scores": [],
