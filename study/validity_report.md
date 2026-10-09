@@ -105,6 +105,8 @@ Detection never failed — MTCNN reported faces with high confidence — so thes
 
 **F6 — Record the single-linkage observation** (F1 0.968, spread 0.0, evaluation tier) somewhere students can find it. It is a useful baseline, and Whispers' 0.067 spread against it is exactly the kind of honest comparison the benchmark exists to teach. No code change implied.
 
+**F7 — The repo's own CI is latently broken.** `ruff check .` (a step of the `ci.yml` matrix) fails with 17 errors in 7 pre-existing files under the current ruff release — stale `.format()` calls (UP032), unsorted imports (I001), one over-long line. GitHub Actions has never recorded a run on this repository, including on the base branch, so the breakage is unobserved upstream. The two files this audit adds are clean under the same tool. Fixing it touches the diagnostic strings the new harness pins — deliberately out of scope here; it is a one-shot `ruff check --fix` plus format on its own commit.
+
 ---
 
 ## 6. Reproduction
