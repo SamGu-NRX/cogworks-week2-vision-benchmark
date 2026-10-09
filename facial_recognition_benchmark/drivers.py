@@ -1,4 +1,12 @@
-"""Benchmark-owned execution drivers for student application behavior."""
+"""Benchmark-owned execution drivers for student application behavior.
+
+Each driver instantiates a fresh student adapter, walks it through one
+scenario's lifecycle (enroll, recognize, enroll, recognize), validates every
+returned label vector against the adapter contract, and packages the answers
+in the shape the scoring and hosting layers expect. Keeping the lifecycle
+here rather than in the submissions is what lets an application expose two
+methods and still be graded on a multi-step protocol.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +21,12 @@ from .contracts import ClusterId, Image, PersonId
 
 @dataclass(frozen=True)
 class RecognitionIdentity:
-    """Enrollment and held-out images for one known identity."""
+    """Enrollment and held-out images for one known identity.
+
+    ``enrollment`` photos build the profile; ``queries`` are asked in the
+    first recognize call — after every identity is enrolled, before the
+    unknown identity is enrolled.
+    """
 
     person_id: PersonId
     enrollment: Sequence[Image]
@@ -93,6 +106,10 @@ class ClusteringScenario:
     scenario_key: Optional[str] = None
 
 
+# Output keys depend on the path taken: the plain lifecycle uses "known",
+# "unknown_before", and "post_enrollment"; the shuffled lifecycle uses
+# "before_enrollment" and "after_enrollment". Only the plain keys are
+# consumed by scoring — see `score_recognition` and `recognition_expected`.
 RecognitionOutput = Dict[str, List[Optional[PersonId]]]
 
 
@@ -100,6 +117,17 @@ def run_recognition_scenario(
     factory: Any, model: Any, scenario: RecognitionScenario
 ) -> RecognitionOutput:
     """Run one stateful recognition lifecycle with a fresh student adapter.
+
+    One adapter is created and kept for the whole scenario: enroll every
+    known identity, ask all their queries in a single recognize call, ask
+    the stranger's queries, enroll the stranger, then ask the
+    post-enrollment queries. The known queries are batched into one call on
+    purpose: clustering a whole batch and labelling the clusters is a
+    technique the week teaches, and per-image calls would forbid it.
+
+    A scenario carrying ``shuffled_queries`` runs the same lifecycle in its
+    label-free form (see :class:`ShuffledQueryBatches`) and the answers come
+    back in the shuffled shape instead.
 
     Parameters
     ----------
@@ -113,7 +141,18 @@ def run_recognition_scenario(
     Returns
     -------
     dict
-        Labels for known, pre-enrollment unknown, and post-enrollment queries.
+        Plain path: keys ``"known"``, ``"unknown_before"``,
+        ``"post_enrollment"`` -> per-image labels. Shuffled path
+        (``shuffled_queries`` present): keys ``"before_enrollment"``,
+        ``"after_enrollment"`` -> per-image labels for the two batches,
+        with no key shared with the plain shape.
+
+    Raises
+    ------
+    AdapterContractError
+        If any recognize() result violates the label contract. The message
+        names the lifecycle phase: ``known``, ``unknown-before-enrollment``,
+        ``post-enrollment``, ``before-enrollment``, or ``after-enrollment``.
     """
 
     adapter = adapt_recognition(instantiate(factory, model))
@@ -158,6 +197,9 @@ def _run_shuffled_queries(
     the two ``recognize`` calls are identical to the plain path. Only the
     contents of the two batches differ, and the caller that built them holds
     the map back to ``known``/``unknown_before``/``post_enrollment``.
+
+    Returns the shuffled output shape — keys ``"before_enrollment"`` and
+    ``"after_enrollment"``, disjoint from the plain path's key set.
     """
 
     before = _recognition_labels(
@@ -179,8 +221,36 @@ def run_clustering_scenario(
 ) -> List[ClusterId]:
     """Run and validate one clustering case with a fresh student adapter.
 
-    Cluster identifiers may be arbitrary strings or integers. Only their
-    partition relationships are meaningful to scoring.
+    Cluster identifiers may be arbitrary strings or integers; only their
+    partition relationships are meaningful to scoring, so a submission may
+    relabel clusters however it likes. NumPy scalars are unwrapped with
+    ``item()`` so a clusterer returning ``np.int64`` or ``np.str_`` labels
+    still satisfies the contract, while booleans are refused: ``True`` and
+    ``False`` cannot express a multi-cluster partition, and accepting them
+    would let a degenerate two-way split pass validation.
+
+    Parameters
+    ----------
+    factory
+        Raw submission factory or compatible application object.
+    model
+        Benchmark-owned FaceNet model supplied to the factory.
+    scenario
+        Images, expected labels, and the seed passed through to
+        ``cluster()``.
+
+    Returns
+    -------
+    list
+        One plain ``str`` or ``int`` label per image, in input order.
+
+    Raises
+    ------
+    AdapterContractError
+        If ``cluster()`` returns a string, a non-sequence, a different
+        number of labels than images, or any label that is not a string or
+        integer (booleans included, NumPy booleans included after
+        unwrapping).
     """
 
     adapter = adapt_clustering(instantiate(factory, model))
@@ -207,11 +277,29 @@ def run_clustering_scenario(
 def recognition_expected(scenario: RecognitionScenario) -> RecognitionOutput:
     """Construct trusted labels for a recognition lifecycle scenario.
 
-    Raises on a scenario carrying ``shuffled_queries``. That is the sandbox's
-    own gold-free view, whose three query lists are empty by construction, so
-    the answer built from it would be three empty vectors. Scored, those give a
-    quiet zero that looks like a submission failing rather than like the
-    controller forgetting to re-attach gold.
+    Parameters
+    ----------
+    scenario
+        A locally built scenario whose three query lists carry the gold.
+
+    Returns
+    -------
+    dict
+        Keys ``"known"``, ``"unknown_before"``, ``"post_enrollment"``:
+        each known identity repeated once per query image, all ``None``
+        for the unknown queries, and the stranger's id for every
+        post-enrollment query. Key-compatible with the plain output of
+        :func:`run_recognition_scenario`.
+
+    Raises
+    ------
+    ValueError
+        On a scenario carrying ``shuffled_queries``. That is the sandbox's
+        own gold-free view, whose three query lists are empty by
+        construction, so the answer built from it would be three empty
+        vectors. Scored, those give a quiet zero that looks like a
+        submission failing rather than like the controller forgetting to
+        re-attach gold.
     """
 
     # `getattr` rather than attribute access: this function accepts anything
@@ -234,6 +322,15 @@ def recognition_expected(scenario: RecognitionScenario) -> RecognitionOutput:
 
 
 def _recognition_labels(value: Any, expected_count: int, phase: str) -> List[Optional[str]]:
+    """Normalize one recognize() result into labels, enforcing the contract.
+
+    Shared by every phase of the lifecycle so the error messages stay
+    uniform; ``phase`` only names where a violation happened (``known``,
+    ``unknown-before-enrollment``, ``post-enrollment``,
+    ``before-enrollment``, ``after-enrollment``). The length check runs
+    before the per-label type check, so a result with both problems is
+    reported as a length mismatch.
+    """
     if isinstance(value, (str, bytes)):
         raise AdapterContractError(
             f"recognize() must return one label per image during {phase}, not a string."
