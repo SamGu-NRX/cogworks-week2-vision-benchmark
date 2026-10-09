@@ -1,0 +1,807 @@
+{
+  "tier": "evaluation",
+  "manifest_id": "celeba-public-evaluation-v1",
+  "recognition": {
+    "arms": {
+      "facenet_cutoff_0.3": {
+        "known_identification": 0.8,
+        "unknown_rejection_recall": 1.0,
+        "post_enrollment_accuracy": 0.8,
+        "recognition_score": 0.8500000000000001,
+        "distance_log": [
+          {
+            "named": "person_0_4",
+            "distance": 0.8215,
+            "accepted": false
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.7471,
+            "accepted": false
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3173,
+            "accepted": false
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.6358,
+            "accepted": false
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.6574,
+            "accepted": false
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.2187,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.2691,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2723,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.1976,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2767,
+            "accepted": true
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3175,
+            "accepted": false
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.449,
+            "accepted": false
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2065,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.364,
+            "accepted": false
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2368,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.1951,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2061,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.1718,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0794,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.8591,
+            "accepted": false
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.1946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.0782,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.9193,
+            "accepted": false
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.2105,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.8884,
+            "accepted": false
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.0946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.438,
+            "accepted": false
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0926,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.13,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.1287,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.2671,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.2216,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.294,
+            "accepted": true
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.1114,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.2578,
+            "accepted": true
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.0974,
+            "accepted": true
+          }
+        ]
+      },
+      "facenet_cutoff_0.5": {
+        "known_identification": 0.95,
+        "unknown_rejection_recall": 1.0,
+        "post_enrollment_accuracy": 1.0,
+        "recognition_score": 0.975,
+        "distance_log": [
+          {
+            "named": "person_0_4",
+            "distance": 0.8215,
+            "accepted": false
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.7471,
+            "accepted": false
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3173,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.6358,
+            "accepted": false
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.6574,
+            "accepted": false
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.2187,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.2691,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2723,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.1976,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2767,
+            "accepted": true
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3175,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.449,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2065,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.364,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2368,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.1951,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2061,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.1718,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0794,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.8591,
+            "accepted": false
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.1946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.0782,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.9193,
+            "accepted": false
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.2105,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.8884,
+            "accepted": false
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.0946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.438,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0926,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.13,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.1287,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.2671,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.2216,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.294,
+            "accepted": true
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.1114,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.2578,
+            "accepted": true
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.0974,
+            "accepted": true
+          }
+        ]
+      },
+      "facenet_cutoff_0.7": {
+        "known_identification": 1.0,
+        "unknown_rejection_recall": 0.8333333333333334,
+        "post_enrollment_accuracy": 1.0,
+        "recognition_score": 0.9583333333333334,
+        "distance_log": [
+          {
+            "named": "person_0_4",
+            "distance": 0.8215,
+            "accepted": false
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.7471,
+            "accepted": false
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3173,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.6358,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.6574,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.2187,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.2691,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2723,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.1976,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2767,
+            "accepted": true
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3175,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.449,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2065,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.364,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2368,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.1951,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2061,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.1718,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0794,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.8591,
+            "accepted": false
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.1946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.0782,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.9193,
+            "accepted": false
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.2105,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.8884,
+            "accepted": false
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.0946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.438,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0926,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.13,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.1287,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.2671,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.2216,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.294,
+            "accepted": true
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.1114,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.2578,
+            "accepted": true
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.0974,
+            "accepted": true
+          }
+        ]
+      },
+      "facenet_cutoff_0.9": {
+        "known_identification": 1.0,
+        "unknown_rejection_recall": 0.16666666666666666,
+        "post_enrollment_accuracy": 1.0,
+        "recognition_score": 0.7916666666666667,
+        "distance_log": [
+          {
+            "named": "person_0_4",
+            "distance": 0.8215,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.7471,
+            "accepted": true
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3173,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.6358,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.6574,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.2187,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.2691,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2723,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.1976,
+            "accepted": true
+          },
+          {
+            "named": "person_0_3",
+            "distance": 0.2767,
+            "accepted": true
+          },
+          {
+            "named": "person_0_1",
+            "distance": 0.3175,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.449,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2065,
+            "accepted": true
+          },
+          {
+            "named": "person_0_2",
+            "distance": 0.364,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2368,
+            "accepted": true
+          },
+          {
+            "named": "person_0_0",
+            "distance": 0.1951,
+            "accepted": true
+          },
+          {
+            "named": "person_0_new",
+            "distance": 0.2061,
+            "accepted": true
+          },
+          {
+            "named": "person_0_4",
+            "distance": 0.1718,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0794,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.8591,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.1946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.0782,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.9193,
+            "accepted": false
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.2105,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.8884,
+            "accepted": true
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.0946,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.438,
+            "accepted": true
+          },
+          {
+            "named": "person_1_0",
+            "distance": 0.0926,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.13,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.1287,
+            "accepted": true
+          },
+          {
+            "named": "person_1_1",
+            "distance": 0.2671,
+            "accepted": true
+          },
+          {
+            "named": "person_1_4",
+            "distance": 0.2216,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.294,
+            "accepted": true
+          },
+          {
+            "named": "person_1_3",
+            "distance": 0.1114,
+            "accepted": true
+          },
+          {
+            "named": "person_1_new",
+            "distance": 0.2578,
+            "accepted": true
+          },
+          {
+            "named": "person_1_2",
+            "distance": 0.0974,
+            "accepted": true
+          }
+        ]
+      },
+      "all_none": {
+        "known_identification": 0.0,
+        "unknown_rejection_recall": 1.0,
+        "post_enrollment_accuracy": 0.0,
+        "recognition_score": 0.25
+      },
+      "positional_cheater": {
+        "known_identification": 0.0,
+        "unknown_rejection_recall": 0.0,
+        "post_enrollment_accuracy": 0.0,
+        "recognition_score": 0.0
+      }
+    },
+    "embedding_failures": [],
+    "images_embedded": 72,
+    "embedding_seconds": 3.45
+  },
+  "clustering": {
+    "arms": {
+      "whispers_reference": {
+        "clustering_pairwise_f1": 0.8512820512820513,
+        "adjusted_rand_index": 0.8158918697522015,
+        "clustering_seed_spread": 0.06659234485321452
+      },
+      "single_linkage": {
+        "clustering_pairwise_f1": 0.967741935483871,
+        "adjusted_rand_index": 0.9587217043941412,
+        "clustering_seed_spread": 0.0
+      },
+      "one_cluster": {
+        "clustering_pairwise_f1": 0.3684210526315789,
+        "adjusted_rand_index": 0.0,
+        "clustering_seed_spread": 0.0
+      },
+      "singleton": {
+        "clustering_pairwise_f1": 0.0,
+        "adjusted_rand_index": 0.0,
+        "clustering_seed_spread": 0.0
+      }
+    },
+    "embedding_failures": [],
+    "images_embedded": 32,
+    "embedding_seconds": 1.54,
+    "case_count": 4,
+    "diagnostics": [
+      "The clustering's F1 held to within 0.000 across 4 seeds."
+    ]
+  },
+  "total_seconds": 7.9
+}
