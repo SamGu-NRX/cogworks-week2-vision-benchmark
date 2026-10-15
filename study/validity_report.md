@@ -116,10 +116,10 @@ Detection never failed — MTCNN reported faces with high confidence — so thes
 PYTHONPATH=".:face_recognition_app" python -m pytest tests/test_metric_validity.py -q
 #   → 65 passed
 
-# Full suite as baselined:
-PYTHONPATH=".:face_recognition_app" python -m pytest tests/ -q \
-  --ignore=tests/test_discovered_chain.py --ignore=tests/test_discovered_recognition.py
-#   → 142 passed, 5 skipped (the two ignored files need the internal cogbench SDK)
+# Full suite, unfiltered, with the internal cogbench SDK 0.2.0 materialized at
+# ~/python/cogbench (see §8) and the packages installed editable:
+PYTHONPATH=".:face_recognition_app" python -m pytest tests/ -q
+#   → 231 passed, 1 failed, 5 skipped (§8)
 
 # Real-image arms (network for CelebA rows; checkpoint verified against model-lock.json):
 PYTHONPATH=".:face_recognition_app" python study/real_arms.py test
@@ -131,5 +131,14 @@ Raw numbers: `study/results/real_arms_test.json`, `study/results/real_arms_evalu
 ## 7. Limitations
 
 - Single-run real-arm measurements on CPU with torch 2.14.1 against a lock pinning 2.2.2; relative orderings (cutoff trade-offs, baseline gaps) are robust, absolute distances are indicative.
-- The two discovered-path test files are excluded from collection by the missing internal `cogbench` SDK — their behavior is outside this audit's scope.
+- The two cogbench-dependent discovered-path files were later run against the internal SDK — see §8; the original baseline (142 passed / 5 skipped) excluded them because the sandbox lacked the SDK.
 - The `whispers()` reference takes its visit order from the global numpy RNG and no seed parameter; the real-arm adapter seeds the global RNG per repeat, which makes the sweep meaningful but is a side effect worth centralizing in the reference itself.
+he internal cogbench SDK (continuation, 2026-10-15)
+
+The internal `cogbench` SDK (version 0.2.0, 24 modules, `pipeline.py` and `resolve.py` included) was materialized from the CogPortal repository's `python/cogbench` at ref `fix/device-link-recovery-20261004` into `~/python/cogbench` — the location the discovered-path tests resolve to via `ROOT = parents[3]`. Results:
+
+- `tests/test_discovered_chain.py` + `tests/test_discovered_recognition.py`: **89 passed, 1 failed**.
+- The entry-point tests, previously uncollectable with the SDK absent, pass once the packages are installed editable (`pip install --ignore-requires-python --no-deps -e . -e face_recognition_app`; the override is needed because the repo pins `<3.13` while this sandbox runs 3.13.14, so `cogworks.benchmarks.v2` and `cogworks.submissions.v2` had never registered).
+- Full unfiltered suite: **231 passed, 1 failed, 5 skipped** (the skips: student corpus not checked out).
+
+The single failure, `TheirPipelineReadsAFolder.test_a_zero_argument_reader_is_handed_the_benchmarks_photos`, is an environment artifact, not a scorer defect. Instrumenting `cogbench.pipeline._nowhere_to_put_them` shows the SDK's zero-argument binding working as designed: after the fixture's `Album()` lists `baseImages` (a relative read, which the SDK treats as serveable), the SDK materializes the benchmark's photos under `probe-scratch/baseImages/` and the fixture opens all six — the binding succeeds at the file level. The refusal is caused instead by a stray `os.listdir('/home/user/benchmarks/week2')` firing inside the same audited window. That path does not exist on this sandbox and appears in neither this repository nor the SDK source (grepped; also absent from `.pth` files, `sitecustomize`, and environment variables), so it is environment-owned code misattributed to the constructor's observation window — and the SDK's note-picker takes the first listing outside the run-owned scratch as the refusal's cause.
